@@ -1,0 +1,7 @@
+Vendored from https://github.com/obra/superpowers
+Version: 6.1.1
+License: MIT (see SUPERPOWERS-LICENSE in this directory)
+
+These skill folders were copied so collaborators and remote agents get them from the repo.
+They are not listed in skills-lock.json. The Vercel skills in this directory are installed
+with `npx skills` and are tracked by skills-lock.json.
