@@ -20,7 +20,8 @@ def test_two_turns_keep_the_successful_reply_and_block_a_busy_conversation(tmp_p
         last_user = messages[-1]["content"]
         return AssistantMessage(content="回复：" + last_user, tool_calls=[])
 
-    client = TestClient(create_app(Settings(data_dir=tmp_path), complete=complete))
+    client = TestClient(create_app(Settings(data_dir=tmp_path, auth_secret="test-secret-value"), complete=complete))
+    _register(client)
     created = client.post("/api/conversations")
     assert created.status_code == 201
     conversation_id = created.json()["conversation_id"]
@@ -64,7 +65,8 @@ def test_empty_reply_keeps_the_previous_success(tmp_path):
     def complete(messages, tools):
         return AssistantMessage(content=replies.pop(0), tool_calls=[])
 
-    client = TestClient(create_app(Settings(data_dir=tmp_path), complete=complete))
+    client = TestClient(create_app(Settings(data_dir=tmp_path, auth_secret="test-secret-value"), complete=complete))
+    _register(client)
     conversation_id = client.post("/api/conversations").json()["conversation_id"]
     first = client.post(f"/api/conversations/{conversation_id}/messages", json={"content": "先记住"})
     assert _wait(client, first.json()["task_id"])["status"] == "succeeded"
@@ -82,7 +84,8 @@ def test_empty_reply_keeps_the_previous_success(tmp_path):
 
 
 def test_message_validation(tmp_path):
-    client = TestClient(create_app(Settings(data_dir=tmp_path), complete=_ok))
+    client = TestClient(create_app(Settings(data_dir=tmp_path, auth_secret="test-secret-value"), complete=_ok))
+    _register(client)
     conversation_id = client.post("/api/conversations", json={}).json()["conversation_id"]
     extra = client.post(
         f"/api/conversations/{conversation_id}/messages",
@@ -94,6 +97,11 @@ def test_message_validation(tmp_path):
     assert blank.status_code == 400
     assert extra.json()["error"]["code"] == "invalid_input"
     assert missing.status_code == 404
+
+
+def _register(client):
+    response = client.post("/api/auth/register", json={"username": "teacher", "password": "correct-horse"})
+    assert response.status_code == 201
 
 
 def _ok(messages, tools):

@@ -4,6 +4,10 @@
 class RequestError(ValueError):
     code = "invalid_input"
 
+    def __init__(self, detail: str = "invalid", public_message: str | None = None):
+        super().__init__(detail)
+        self.public_message = public_message
+
 
 def parse_create_conversation(body: object) -> None:
     if body in (None, {}):

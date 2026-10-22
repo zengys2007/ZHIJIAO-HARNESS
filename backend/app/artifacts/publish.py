@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from uuid import uuid4
 
 from app.storage.files import FileStore
-from app.storage.repository import Repository
+from app.storage.protocol import Repository
 from app.tasks.states import RUNNING, SUCCEEDED
 
 

@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from app.graph.build import build_graph
 from app.llm.protocol import AssistantMessage, ModelError, ToolCall
 from app.storage.files import FileStore
-from app.storage.repository import Repository
+from app.storage.repository import SqliteRepository
 from app.tasks.runner import fail_stale_tasks, run_turn
 from app.tasks.states import FAILED, RUNNING, SUCCEEDED
 from app.tools.registry import Registry, production_registry
@@ -49,7 +49,7 @@ def test_page_turn_publishes_one_version(tmp_path):
 
 
 def test_failed_validation_does_not_publish(tmp_path):
-    repo = Repository(tmp_path / "data" / "app.sqlite")
+    repo = SqliteRepository(tmp_path / "data" / "app.sqlite")
     store = FileStore(tmp_path / "data")
     task = repo.create_task("做一个页面", None)
     complete = Scripted(
@@ -159,7 +159,7 @@ def test_running_task_without_events_becomes_interrupted(tmp_path):
 
 
 def _task(tmp_path):
-    repo = Repository(tmp_path / "app.sqlite")
+    repo = SqliteRepository(tmp_path / "app.sqlite")
     store = FileStore(tmp_path)
     task = repo.create_task("做一个页面", None)
     return repo, store, task

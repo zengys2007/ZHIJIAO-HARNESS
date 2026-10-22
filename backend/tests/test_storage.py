@@ -2,12 +2,12 @@ import pytest
 
 from app.artifacts.publish import PublishError, publish_candidate
 from app.storage.files import FileStore
-from app.storage.repository import InputError, Repository
+from app.storage.repository import InputError, SqliteRepository
 from app.tasks.states import FAILED, PENDING, RUNNING, SUCCEEDED
 
 
 def test_new_task_is_pending_and_round_trips(tmp_path):
-    repo = Repository(tmp_path / "app.sqlite")
+    repo = SqliteRepository(tmp_path / "app.sqlite")
     task = repo.create_task("做一个页面", None)
 
     assert task.status == PENDING
@@ -32,13 +32,13 @@ def test_new_task_is_pending_and_round_trips(tmp_path):
     ],
 )
 def test_new_task_rejects_illegal_input(tmp_path, raw_request, preset_hint):
-    repo = Repository(tmp_path / "app.sqlite")
+    repo = SqliteRepository(tmp_path / "app.sqlite")
     with pytest.raises(InputError):
         repo.create_task(raw_request, preset_hint)
 
 
 def test_status_transition_is_persisted_and_guarded(tmp_path):
-    repo = Repository(tmp_path / "app.sqlite")
+    repo = SqliteRepository(tmp_path / "app.sqlite")
     task = repo.create_task("随机点名", None)
     repo.transition(task.id, RUNNING, step_count=2)
 
@@ -50,7 +50,7 @@ def test_status_transition_is_persisted_and_guarded(tmp_path):
 
 
 def test_events_append_in_order_and_reject_unknown_types(tmp_path):
-    repo = Repository(tmp_path / "app.sqlite")
+    repo = SqliteRepository(tmp_path / "app.sqlite")
     task = repo.create_task("随机点名", None)
     first = repo.append_event(task.id, "user_message", {"content": "随机点名"})
     second = repo.append_event(
@@ -97,7 +97,7 @@ def test_file_store_rejects_unsafe_paths(tmp_path, task_id, relative_path):
 
 
 def test_publish_moves_candidate_into_the_version_directory(tmp_path):
-    repo = Repository(tmp_path / "app.sqlite")
+    repo = SqliteRepository(tmp_path / "app.sqlite")
     store = FileStore(tmp_path)
     task = repo.create_task("做一个页面", None)
     repo.transition(task.id, RUNNING)
@@ -135,7 +135,7 @@ def test_publish_moves_candidate_into_the_version_directory(tmp_path):
 
 
 def test_publish_from_a_non_running_task_writes_nothing(tmp_path):
-    repo = Repository(tmp_path / "app.sqlite")
+    repo = SqliteRepository(tmp_path / "app.sqlite")
     store = FileStore(tmp_path)
     task = repo.create_task("随机点名", None)
     store.write_candidate(task.id, [{"path": "index.html", "content": "<p>林晓</p>"}])
@@ -153,7 +153,7 @@ def test_publish_from_a_non_running_task_writes_nothing(tmp_path):
 
 
 def test_failed_file_move_rolls_back_the_version_row(tmp_path, monkeypatch):
-    repo = Repository(tmp_path / "app.sqlite")
+    repo = SqliteRepository(tmp_path / "app.sqlite")
     store = FileStore(tmp_path)
     task = repo.create_task("随机点名", None)
     repo.transition(task.id, RUNNING)
@@ -180,7 +180,7 @@ def test_remove_tmp_discards_a_failed_round(tmp_path):
 
 
 def test_terminal_failure_records_error_without_a_version(tmp_path):
-    repo = Repository(tmp_path / "app.sqlite")
+    repo = SqliteRepository(tmp_path / "app.sqlite")
     task = repo.create_task("随机点名", None)
     repo.transition(task.id, RUNNING)
     repo.transition(task.id, FAILED, error_code="no_artifact", error_message="这次没有生成可预览的页面，可以换种说法再试。")

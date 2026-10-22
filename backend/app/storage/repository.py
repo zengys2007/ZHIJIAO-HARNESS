@@ -1,73 +1,35 @@
-"""任务、会话事件、产物和版本。数据库驱动只出现在这个目录。"""
+"""SQLite 存储。数据库驱动只出现在这个文件。"""
 
 import json
 import sqlite3
 import threading
 from contextlib import contextmanager
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
 from app.artifacts.contract import ARTIFACT_TYPE, artifact_view
+from app.auth.passwords import hash_password
+from app.storage.protocol import (
+    ConflictError,
+    ConversationSummary,
+    Event,
+    InputError,
+    NotFoundError,
+    Session,
+    Task,
+    User,
+    VersionRecord,
+)
 from app.tasks.states import transition as change_status
 
 EVENT_TYPES = {"user_message", "assistant_message", "tool_result", "artifact_published"}
 MAX_REQUEST_CHARS = 4000
+LOCAL_ADMIN = "local-admin"
 
 
-class InputError(ValueError):
-    code = "invalid_input"
-
-
-class ConflictError(Exception):
-    code = "conflict"
-
-
-class NotFoundError(Exception):
-    code = "not_found"
-
-
-@dataclass
-class Task:
-    id: str
-    status: str
-    step_count: int
-    error_code: str | None
-    error_message: str | None
-    artifact_id: str | None
-    version: int | None
-    conversation_id: str | None
-    reply: str | None
-    raw_request: str
-    preset_hint: str | None
-    created_at: str
-    updated_at: str
-
-
-@dataclass
-class Event:
-    seq: int
-    type: str
-    payload: dict
-    created_at: str
-
-
-@dataclass
-class VersionRecord:
-    artifact_id: str
-    version: int
-    task_id: str
-    title: str
-    tool_name: str
-    preset: str | None
-    files: list
-    metadata: dict
-    arguments: dict
-
-
-class Repository:
-    def __init__(self, db_path: Path):
+class SqliteRepository:
+    def __init__(self, db_path: Path, admin_password: str | None = None):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False, isolation_level=None)
@@ -75,6 +37,63 @@ class Repository:
         self._lock = threading.RLock()
         self._depth = 0
         self._create_schema()
+        self._ensure_owner_column()
+        self._adopt_unowned(admin_password)
+
+    def create_user(self, username: str, display_name: str, password_hash: str) -> User:
+        user_id = uuid4().hex
+        now = _now()
+        try:
+            with self.transaction():
+                self._conn.execute(
+                    """
+                    INSERT INTO users (id, username, display_name, password_hash, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (user_id, username, display_name, password_hash, now),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise ConflictError("username taken") from exc
+        return User(
+            id=user_id,
+            username=username,
+            display_name=display_name,
+            password_hash=password_hash,
+            created_at=now,
+        )
+
+    def get_user(self, user_id: str) -> User | None:
+        row = self._conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return _user(row) if row else None
+
+    def get_user_by_username(self, username: str) -> User | None:
+        row = self._conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+        return _user(row) if row else None
+
+    def create_session(self, user_id: str, expires_at: str) -> Session:
+        session_id = uuid4().hex
+        now = _now()
+        with self.transaction():
+            self._conn.execute(
+                "INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
+                (session_id, user_id, expires_at, now),
+            )
+        return Session(id=session_id, user_id=user_id, expires_at=expires_at, created_at=now)
+
+    def get_session(self, session_id: str) -> Session | None:
+        row = self._conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        if row is None:
+            return None
+        return Session(
+            id=row["id"],
+            user_id=row["user_id"],
+            expires_at=row["expires_at"],
+            created_at=row["created_at"],
+        )
+
+    def delete_session(self, session_id: str) -> None:
+        with self.transaction():
+            self._conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
 
     def create_task(self, raw_request: str, preset_hint: str | None) -> Task:
         if not isinstance(raw_request, str) or raw_request.strip() == "" or len(raw_request) > MAX_REQUEST_CHARS:
@@ -102,16 +121,41 @@ class Repository:
         row = self._conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         return _task(row) if row else None
 
-    def create_conversation(self) -> str:
+    def create_conversation(self, owner_id: str) -> str:
         conversation_id = uuid4().hex
         with self.transaction():
             self._conn.execute(
-                "INSERT INTO conversations (id, created_at) VALUES (?, ?)",
-                (conversation_id, _now()),
+                "INSERT INTO conversations (id, created_at, owner_id) VALUES (?, ?, ?)",
+                (conversation_id, _now(), owner_id),
             )
         return conversation_id
 
-    def submit_message(self, conversation_id: str, content: str) -> Task:
+    def list_conversations(self, owner_id: str) -> list[ConversationSummary]:
+        rows = self._conn.execute(
+            """
+            SELECT c.id, c.created_at,
+              (
+                SELECT raw_request FROM tasks
+                WHERE conversation_id = c.id
+                ORDER BY created_at, id
+                LIMIT 1
+              ) AS first_message
+            FROM conversations c
+            WHERE c.owner_id = ?
+            ORDER BY c.created_at DESC, c.id DESC
+            """,
+            (owner_id,),
+        ).fetchall()
+        return [
+            ConversationSummary(
+                conversation_id=row["id"],
+                title=_conversation_title(row["first_message"]),
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
+
+    def submit_message(self, conversation_id: str, content: str, owner_id: str) -> Task:
         if not isinstance(content, str):
             raise InputError("invalid task request")
         text = content.strip()
@@ -121,8 +165,8 @@ class Repository:
         now = _now()
         with self.transaction():
             found = self._conn.execute(
-                "SELECT id FROM conversations WHERE id = ?",
-                (conversation_id,),
+                "SELECT id FROM conversations WHERE id = ? AND owner_id = ?",
+                (conversation_id, owner_id),
             ).fetchone()
             if found is None:
                 raise NotFoundError("conversation not found")
@@ -161,10 +205,21 @@ class Repository:
         ).fetchall()
         return [(row["raw_request"], row["reply"] or "") for row in rows]
 
-    def list_conversation_tasks(self, conversation_id: str) -> list[Task] | None:
+    def get_task_for_owner(self, task_id: str, owner_id: str) -> Task | None:
+        row = self._conn.execute(
+            """
+            SELECT tasks.* FROM tasks
+            JOIN conversations ON conversations.id = tasks.conversation_id
+            WHERE tasks.id = ? AND conversations.owner_id = ?
+            """,
+            (task_id, owner_id),
+        ).fetchone()
+        return _task(row) if row else None
+
+    def list_conversation_tasks(self, conversation_id: str, owner_id: str) -> list[Task] | None:
         found = self._conn.execute(
-            "SELECT id FROM conversations WHERE id = ?",
-            (conversation_id,),
+            "SELECT id FROM conversations WHERE id = ? AND owner_id = ?",
+            (conversation_id, owner_id),
         ).fetchone()
         if found is None:
             return None
@@ -374,9 +429,23 @@ class Repository:
               created_at TEXT NOT NULL,
               updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS users (
+              id TEXT PRIMARY KEY,
+              username TEXT NOT NULL UNIQUE,
+              display_name TEXT NOT NULL,
+              password_hash TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS sessions (
+              id TEXT PRIMARY KEY,
+              user_id TEXT NOT NULL,
+              expires_at TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS conversations (
               id TEXT PRIMARY KEY,
-              created_at TEXT NOT NULL
+              created_at TEXT NOT NULL,
+              owner_id TEXT
             );
             CREATE TABLE IF NOT EXISTS events (
               task_id TEXT NOT NULL,
@@ -408,6 +477,28 @@ class Repository:
             """
         )
 
+    def _ensure_owner_column(self) -> None:
+        columns = {row[1] for row in self._conn.execute("PRAGMA table_info(conversations)")}
+        if "owner_id" not in columns:
+            self._conn.execute("ALTER TABLE conversations ADD COLUMN owner_id TEXT")
+
+    def _adopt_unowned(self, admin_password: str | None) -> None:
+        pending = self._conn.execute(
+            "SELECT id FROM conversations WHERE owner_id IS NULL OR owner_id = ''"
+        ).fetchone()
+        if pending is None:
+            return
+        admin = self.get_user_by_username(LOCAL_ADMIN)
+        if admin is None:
+            if not isinstance(admin_password, str) or not 8 <= len(admin_password) <= 128:
+                raise RuntimeError("AUTH_ADMIN_PASSWORD is required to assign existing conversations")
+            admin = self.create_user(LOCAL_ADMIN, "本地管理员", hash_password(admin_password))
+        with self.transaction():
+            self._conn.execute(
+                "UPDATE conversations SET owner_id = ? WHERE owner_id IS NULL OR owner_id = ''",
+                (admin.id,),
+            )
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -429,3 +520,25 @@ def _task(row: sqlite3.Row) -> Task:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
+
+
+def _user(row: sqlite3.Row) -> User:
+    return User(
+        id=row["id"],
+        username=row["username"],
+        display_name=row["display_name"],
+        password_hash=row["password_hash"],
+        created_at=row["created_at"],
+    )
+
+
+def _conversation_title(content: str | None) -> str:
+    if content is None:
+        return "新对话"
+    line = content.strip().split("\n", 1)[0]
+    chars = list(line)
+    if not chars:
+        return "新对话"
+    if len(chars) <= 18:
+        return line
+    return "".join(chars[:18]) + "…"

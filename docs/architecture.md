@@ -1,6 +1,6 @@
 # 智教 Harness 目录
 
-状态：已确认（2026-10-21）。第 1 步已选定 FastAPI 与标准库 sqlite3。
+状态：已确认（2026-10-21）。第 1 步已选定 FastAPI 与标准库 sqlite3。对话 MVP 已于 2026-10-22 标记完成。用户和登录会话表在 `backend/app/storage/repository.py`。
 
 本文只定源码和运行时文件放在哪里。产品范围、图的停机和 API 以 [MVP 路线](superpowers/specs/2026-10-21-mvp-roadmap.md) 为准。阶段顺序以 [后续路线](superpowers/specs/2026-10-21-later-roadmap.md) 为准。
 
@@ -54,8 +54,12 @@ backend/
       assemble.py              唯一组装模型输入的地方
     llm/
       complete.py              complete(messages, tools)。注册表为空时不传 tools
+    auth/
+      passwords.py             scrypt 密码哈希
+      sessions.py              登录 Cookie 的签发和校验
     storage/
-      repository.py            会话、任务、会话事件
+      protocol.py              存储方法。调用方不写 SQL
+      repository.py            SQLite。会话、任务、用户和登录会话
   tests/
     graph/
     tools/
@@ -117,4 +121,4 @@ MVP 没有预览页。`frontend/preview.html` 不进入工作台，也不插入�
 - `tools/search_materials.py`：只读检索
 - 队列消费者：替换执行器所在的进程，不替换 `graph/`
 
-不建 `presets/`、`use_preset.py`、`agents/`、`plugins/`、`generators/`、用户表、Redis 或 Celery 的目录。点名器、计时器和投票器没有目录。
+不建 `presets/`、`use_preset.py`、`agents/`、`plugins/`、`generators/`、Redis 或 Celery 的目录。用户表写在现有 SQLite 里，不另建用户服务。点名器、计时器和投票器没有目录。

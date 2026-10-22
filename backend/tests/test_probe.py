@@ -20,7 +20,8 @@ def test_local_probe_reads_process_environment_not_the_dotenv_file(monkeypatch, 
         seen.update(base_url=base_url, api_key=api_key, model=model)
         return True
 
-    client = TestClient(create_app(Settings(data_dir=tmp_path), complete=_ok, probe=probe, env_file=env_file))
+    client = TestClient(create_app(Settings(data_dir=tmp_path, auth_secret="test-secret-value"), complete=_ok, probe=probe, env_file=env_file))
+    _register(client)
     response = client.post("/api/llm/probe", json={"source": "local"})
     assert response.status_code == 200
     assert response.json() == {"reachable": True}
@@ -44,7 +45,8 @@ def test_dotenv_probe_reads_the_file_and_keeps_a_blank_key_from_the_file(monkeyp
         calls.append((base_url, api_key, model))
         return True
 
-    client = TestClient(create_app(Settings(data_dir=tmp_path), complete=_ok, probe=probe, env_file=env_file))
+    client = TestClient(create_app(Settings(data_dir=tmp_path, auth_secret="test-secret-value"), complete=_ok, probe=probe, env_file=env_file))
+    _register(client)
     edited = client.post(
         "/api/llm/probe",
         json={"source": "dotenv", "base_url": "https://example.com/v1", "model": "other"},
@@ -65,7 +67,8 @@ def test_llm_config_hides_keys(monkeypatch, tmp_path):
     monkeypatch.setenv("LLM_BASE_URL", "http://env.test/v1")
     monkeypatch.setenv("LLM_API_KEY", "env-key")
     monkeypatch.setenv("LLM_MODEL", "env-model")
-    client = TestClient(create_app(Settings(data_dir=tmp_path), complete=_ok, probe=lambda *args: True, env_file=env_file))
+    client = TestClient(create_app(Settings(data_dir=tmp_path, auth_secret="test-secret-value"), complete=_ok, probe=lambda *args: True, env_file=env_file))
+    _register(client)
     body = client.get("/api/llm/config").json()
     assert body == {
         "environment": {"base_url": "http://env.test/v1", "model": "env-model", "has_api_key": True},
@@ -93,7 +96,8 @@ def test_local_probe_ignores_values_copied_from_the_dotenv_file(monkeypatch, tmp
         called = True
         return True
 
-    client = TestClient(create_app(Settings(data_dir=tmp_path), complete=_ok, probe=probe, env_file=env_file))
+    client = TestClient(create_app(Settings(data_dir=tmp_path, auth_secret="test-secret-value"), complete=_ok, probe=probe, env_file=env_file))
+    _register(client)
     response = client.post("/api/llm/probe", json={"source": "local"})
     config = client.get("/api/llm/config").json()
     assert response.json() == {"reachable": False}
@@ -103,10 +107,16 @@ def test_local_probe_ignores_values_copied_from_the_dotenv_file(monkeypatch, tmp
 
 
 def test_probe_rejects_extra_fields(tmp_path):
-    client = TestClient(create_app(Settings(data_dir=tmp_path), complete=_ok, probe=lambda *args: True, env_file=tmp_path / "missing.env"))
+    client = TestClient(create_app(Settings(data_dir=tmp_path, auth_secret="test-secret-value"), complete=_ok, probe=lambda *args: True, env_file=tmp_path / "missing.env"))
+    _register(client)
     response = client.post("/api/llm/probe", json={"source": "local", "extra": 1})
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "invalid_input"
+
+
+def _register(client):
+    response = client.post("/api/auth/register", json={"username": "teacher", "password": "correct-horse"})
+    assert response.status_code == 201
 
 
 def _ok(messages, tools):

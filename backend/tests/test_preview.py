@@ -7,7 +7,7 @@ from app.config import Settings
 from app.main import create_app
 from app.preview.serve import load_preview
 from app.storage.files import FileStore
-from app.storage.repository import Repository
+from app.storage.repository import SqliteRepository
 from app.tasks.states import RUNNING
 from tests.support import PLAIN_PAGE
 
@@ -19,7 +19,7 @@ CSP = (
 
 def test_published_preview_is_isolated_from_the_workbench(tmp_path):
     published = _publish_plain_page(tmp_path)
-    client = TestClient(create_app(Settings(data_dir=tmp_path), complete=_idle_complete))
+    client = TestClient(create_app(Settings(data_dir=tmp_path, auth_secret="test-secret-value"), complete=_idle_complete))
 
     preview = client.get(f"/api/artifacts/{published.artifact_id}/versions/1/preview/")
     shell = client.get(f"/?artifact_id={published.artifact_id}&version=1")
@@ -75,7 +75,7 @@ def _idle_complete(messages, tools):
 
 
 def _publish_plain_page(tmp_path):
-    repository = Repository(tmp_path / "app.sqlite")
+    repository = SqliteRepository(tmp_path / "app.sqlite")
     store = FileStore(tmp_path)
     task = repository.create_task("做一个页面", None)
     repository.transition(task.id, RUNNING)

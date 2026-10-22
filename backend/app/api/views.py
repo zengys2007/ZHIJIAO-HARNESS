@@ -1,7 +1,7 @@
 """任务和会话的对外字段。"""
 
 from app.api.errors import error_body
-from app.storage.repository import Repository, Task
+from app.storage.protocol import Repository, Task
 from app.tasks.states import FAILED, SUCCEEDED
 
 

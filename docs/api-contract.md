@@ -1,10 +1,10 @@
 # 智教 Harness MVP 接口契约
 
-状态：已确认（2026-10-21）
+状态：已确认（2026-10-21）。对话 MVP 已于 2026-10-22 标记完成。2026-10-22 起，对话和模型试连要求登录，规则见第 9 节。
 
 本文是对话接口的字段契约。产品行为以 [MVP 路线](superpowers/specs/2026-10-21-mvp-roadmap.md) 为准。路径或状态含义有冲突时，先改路线，再改本文。
 
-范围包括四个对话接口，以及第 7 节的模型试连。不包含 `GET /health`、工作台页面，也不包含产物预览、修改和导出。那些路由不在本契约里。实现对话时不要再扩展对话接口。
+范围包括四个对话接口、当前教师的会话列表、第 7 节的模型试连，以及第 9 节的注册、登录、退出和当前用户。不包含 `GET /health`、工作台页面，也不包含产物预览、修改和导出。那些路由不在本契约里。
 
 ## 1. 共同约定
 
@@ -13,7 +13,7 @@
 - `conversation_id` 和 `task_id` 是 32 位小写十六进制。路径里的标识不符合这个形式，或者库里没有，都返回 `not_found`。
 - 成功响应不含 `error`。失败响应只有 `error`，不含部分成功字段。
 - `error.message` 使用第 6 节的句子。不含堆栈、绝对路径、密钥和系统提示词。
-- 不要求登录，不读取 Cookie 或 Authorization。
+- 对话、会话列表和模型试连从 Cookie `zhijiao_session` 识别教师。不读取 `Authorization`。未登录返回 401 `unauthenticated`。`GET /health` 不登录。
 - 未知字段视为 `invalid_input`。不忽略多出来的字段。
 
 失败正文：
@@ -34,6 +34,7 @@
 | 202 | 消息已接收，任务仍是 `pending` |
 | 200 | 读取成功 |
 | 400 | `invalid_input` |
+| 401 | `unauthenticated` |
 | 404 | `not_found` |
 | 409 | `conflict` |
 | 500 | 请求还没变成任务就失败：`storage_failed` 或 `internal` |
@@ -210,6 +211,7 @@
 | `error.code` | HTTP，仅当这次请求本身失败 | `retryable` | `error.message` |
 | --- | --- | --- | --- |
 | `invalid_input` | 400 | 否 | 请把这句话写成 1 到 4000 字后再发送。 |
+| `unauthenticated` | 401 | 否 | 请先登录。 |
 | `not_found` | 404 | 否 | 没有找到这个会话或任务。 |
 | `conflict` | 409 | 否 | 上一条还在处理，请等它结束再发送。 |
 | `model_timeout` | 不用于提交响应 | 是 | 模型响应超时，可以再发一次。 |
@@ -252,4 +254,78 @@
 
 ## 8. 实现状态
 
-四个对话接口和一个模型试连接口已经挂在 `backend/app/main.py`。工作台源码在 `frontend/`，开发入口是 `frontend/index.html`。模型适配在 `backend/app/llm/complete.py`。单元测试注入假的 `complete` 和试连函数，不访问真实供应商。
+对话 MVP 已于 2026-10-22 标记完成。四个对话接口、会话列表、模型试连和登录接口已经挂在 `backend/app/main.py`。工作台源码在 `frontend/`，开发入口是 `frontend/index.html`，尚未发送登录 Cookie。画面和文案见 [登录工作台界面](superpowers/specs/2026-10-22-login-frontend.md)。模型适配在 `backend/app/llm/complete.py`。单元测试注入假的 `complete` 和试连函数，不访问真实供应商。
+
+## 9. 登录
+
+登录态是 Cookie `zhijiao_session`。属性为 `HttpOnly`、`SameSite=Lax`、`Path=/`。成功的注册和登录设置这枚 Cookie。退出删除服务端会话并清除 Cookie。
+
+用户名去掉首尾空白后为 1 到 32 个码位，且不含空白。密码为 8 到 128 个码位。显示名去掉首尾空白后为 1 到 32 个码位，中间可以有空格。`local-admin` 不能注册。
+
+| 情况 | HTTP | `error.code` | `error.message` |
+| --- | --- | --- | --- |
+| 用户名不合法 | 400 | `invalid_input` | 用户名写成 1 到 32 个字，中间不要有空格。 |
+| 密码不合法 | 400 | `invalid_input` | 密码写成 8 到 128 个字。 |
+| 显示名不合法 | 400 | `invalid_input` | 显示名写成 1 到 32 个字。 |
+| 多出来的字段 | 400 | `invalid_input` | 请求里有不能识别的字段。 |
+| 用户名或密码不正确 | 400 | `invalid_input` | 用户名或密码不正确。 |
+| 用户名已存在，或使用 `local-admin` | 409 | `conflict` | 这个用户名已经有人使用。 |
+| 未登录 | 401 | `unauthenticated` | 请先登录。 |
+
+对话忙时的 `conflict` 句子不变。别人的会话和任务返回第 6 节的 `not_found`。
+
+### 9.1 注册
+
+`POST /api/auth/register`
+
+```json
+{ "username": "teacher", "password": "correct-horse", "display_name": "王老师" }
+```
+
+`display_name` 可省略，省略时等于处理后的用户名。201：
+
+```json
+{
+  "user_id": "0123456789abcdef0123456789abcdef",
+  "username": "teacher",
+  "display_name": "王老师"
+}
+```
+
+### 9.2 登录
+
+`POST /api/auth/login`
+
+```json
+{ "username": "teacher", "password": "correct-horse" }
+```
+
+成功时 200，正文与注册相同，并设置 Cookie。字段缺失或类型不对时，用第 9 节对应字段的句子。
+
+### 9.3 退出
+
+`POST /api/auth/logout`。没有正文。已登录时 204，没有正文。未登录时 401，并清除 Cookie。
+
+### 9.4 当前用户
+
+`GET /api/auth/me`。已登录时 200，正文与注册相同。
+
+### 9.5 会话列表
+
+`GET /api/conversations`。只返回当前教师的会话，按 `created_at` 降序，相同时按 `conversation_id` 降序。
+
+```json
+{
+  "conversations": [
+    {
+      "conversation_id": "0123456789abcdef0123456789abcdef",
+      "title": "这节课怎么讲通分",
+      "created_at": "2026-10-22T02:00:00Z"
+    }
+  ]
+}
+```
+
+`title` 取最早一条教师消息的第一行，超过 18 个码位时保留前 18 个并加上 `…`。还没有消息时为「新对话」。
+
+创建会话时写入当前教师。读取、发送和轮询只面对该教师的记录。

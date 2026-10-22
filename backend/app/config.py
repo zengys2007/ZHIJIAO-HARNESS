@@ -12,6 +12,8 @@ class Settings:
     llm_api_key: str = ""
     llm_model: str = ""
     llm_timeout_seconds: int = 60
+    auth_secret: str = ""
+    auth_admin_password: str = ""
 
 
 _filled_from_file: dict[str, str] = {}
@@ -78,6 +80,9 @@ def load_settings() -> Settings:
     model = os.environ.get("LLM_MODEL", "").strip()
     if not base_url or not api_key or not model:
         raise RuntimeError("LLM_BASE_URL, LLM_API_KEY and LLM_MODEL are required")
+    auth_secret = os.environ.get("AUTH_SECRET", "").strip()
+    if len(auth_secret) < 16:
+        raise RuntimeError("AUTH_SECRET must be at least 16 characters")
     timeout_raw = os.environ.get("LLM_TIMEOUT_SECONDS", "60")
     try:
         timeout = int(timeout_raw)
@@ -89,4 +94,6 @@ def load_settings() -> Settings:
         llm_api_key=api_key,
         llm_model=model,
         llm_timeout_seconds=timeout,
+        auth_secret=auth_secret,
+        auth_admin_password=os.environ.get("AUTH_ADMIN_PASSWORD", ""),
     )

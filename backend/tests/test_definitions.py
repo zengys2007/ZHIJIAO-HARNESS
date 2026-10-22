@@ -50,6 +50,7 @@ def test_error_body_uses_one_shape_and_known_retry_flags():
     ("code", "retryable"),
     [
         ("invalid_input", False),
+        ("unauthenticated", False),
         ("not_found", False),
         ("conflict", False),
         ("step_limit", True),
@@ -137,3 +138,4 @@ def _llm_env(monkeypatch):
     monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:9")
     monkeypatch.setenv("LLM_API_KEY", "test-key")
     monkeypatch.setenv("LLM_MODEL", "fake")
+    monkeypatch.setenv("AUTH_SECRET", "test-secret-value")
