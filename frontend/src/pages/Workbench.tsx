@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { DisconnectError, httpApi } from "../api/http";
+import { DisconnectError, httpApi, loadLlmSources, probeLlm, type LlmSources, type ProbeRequest } from "../api/http";
 import { previewApi } from "../api/preview";
 import { pollTask } from "../lib/poll";
 import { loadSessions, saveSessions, type SessionSummary } from "../lib/sessions";
 import { CONTENT_LIMIT, INVALID_CONTENT_MESSAGE, codePointLength, conversationTitle } from "../lib/text";
 import type { ConversationApi, ConversationMessage, TaskSnapshot } from "../types/api";
 import { Composer } from "../components/Composer";
+import { Settings, type SettingsSection } from "../components/Settings";
 import { Sidebar } from "../components/Sidebar";
 import { Transcript } from "../components/Transcript";
 
@@ -13,9 +14,11 @@ const EMPTY_MESSAGES: ConversationMessage[] = [];
 
 type Props = {
   api?: ConversationApi;
+  probe?: (body: ProbeRequest, signal?: AbortSignal) => Promise<{ reachable: boolean }>;
+  loadSources?: (signal?: AbortSignal) => Promise<LlmSources>;
 };
 
-export function Workbench({ api }: Props) {
+export function Workbench({ api, probe = probeLlm, loadSources = loadLlmSources }: Props) {
   const [sessions, setSessions] = useState<SessionSummary[]>(loadSessions);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [cache, setCache] = useState<Record<string, ConversationMessage[]>>({});
@@ -24,6 +27,8 @@ export function Workbench({ api }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
   const [preview, setPreview] = useState(false);
+  const [view, setView] = useState<"chat" | "settings">("chat");
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("user");
   const busyRef = useRef(false);
   const aliveRef = useRef(true);
   const clientRef = useRef<ConversationApi>(api ?? httpApi);
@@ -135,6 +140,7 @@ export function Workbench({ api }: Props) {
 
   function handleNew() {
     if (busyRef.current) return;
+    setView("chat");
     setActiveId(null);
     setUnsent([]);
     setDraft("");
@@ -142,6 +148,7 @@ export function Workbench({ api }: Props) {
   }
 
   function handleSelect(id: string) {
+    setView("chat");
     if (busyRef.current || id === activeId) return;
     setBanner(null);
     setActiveId(id);
@@ -166,20 +173,31 @@ export function Workbench({ api }: Props) {
         activeId={activeId}
         busy={submitting}
         preview={preview}
+        settingsOpen={view === "settings"}
+        settingsSection={settingsSection}
+        onSettingsSection={setSettingsSection}
         onNew={handleNew}
         onSelect={handleSelect}
+        onOpenSettings={() => setView("settings")}
+        onCloseSettings={() => setView("chat")}
       />
       <main className="main">
-        <Transcript messages={messages} loading={activeId !== null && cache[activeId] === undefined} />
-        <Composer
-          value={draft}
-          busy={submitting}
-          alert={banner}
-          onChange={setDraft}
-          onSubmit={() => {
-            void handleSubmit();
-          }}
-        />
+        {view === "settings" ? (
+          <Settings section={settingsSection} probe={probe} loadSources={loadSources} />
+        ) : (
+          <>
+            <Transcript messages={messages} loading={activeId !== null && cache[activeId] === undefined} />
+            <Composer
+              value={draft}
+              busy={submitting}
+              alert={banner}
+              onChange={setDraft}
+              onSubmit={() => {
+                void handleSubmit();
+              }}
+            />
+          </>
+        )}
       </main>
     </div>
   );

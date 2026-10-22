@@ -1,8 +1,10 @@
+import os
+
 import pytest
 
 from app.api.errors import error_body
 from app.artifacts.contract import CAPABILITIES, ARTIFACT_TYPE, artifact_view
-from app.config import load_settings
+from app.config import load_env_file, load_settings
 from app.tasks.states import FAILED, PENDING, RUNNING, SUCCEEDED, transition
 
 
@@ -108,6 +110,19 @@ def test_settings_default_data_dir_is_data(monkeypatch, tmp_path):
     settings = load_settings()
 
     assert settings.data_dir == (tmp_path / "data").resolve()
+
+
+def test_env_file_fills_missing_names_without_overriding(monkeypatch, tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("LLM_MODEL=from-file\nLLM_API_KEY=from-file\nALREADY=from-file\n", encoding="utf-8")
+    monkeypatch.setenv("ALREADY", "from-env")
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+
+    load_env_file(env_file)
+
+    assert os.environ["LLM_MODEL"] == "from-file"
+    assert os.environ["ALREADY"] == "from-env"
 
 
 def test_settings_refuse_to_start_without_a_model_key(monkeypatch):

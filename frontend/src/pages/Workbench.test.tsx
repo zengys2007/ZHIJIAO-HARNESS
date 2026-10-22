@@ -2,6 +2,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ConversationApi, ConversationMessage, TaskSnapshot } from "../types/api";
+import type { ProbeRequest } from "../api/http";
 import { Workbench } from "./Workbench";
 
 const conversationId = "0123456789abcdef0123456789abcdef";
@@ -9,9 +10,70 @@ const conversationId = "0123456789abcdef0123456789abcdef";
 afterEach(() => {
   cleanup();
   sessionStorage.clear();
+  localStorage.clear();
 });
 
 describe("工作台", () => {
+  it("左下角显示未登录，点击后左侧变成设置导航", async () => {
+    const user = userEvent.setup();
+    render(<Workbench api={immediateApi()} />);
+
+    expect(screen.getByRole("button", { name: "未登录" }).textContent).toContain("未登录");
+    await user.click(screen.getByRole("button", { name: "未登录" }));
+
+    expect(screen.queryByRole("button", { name: "新对话" })).toBeNull();
+    expect(screen.getByRole("navigation", { name: "设置" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "用户设置" }).getAttribute("aria-current")).toBe("page");
+    expect(screen.getByRole("heading", { name: "用户设置" })).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "外观" }));
+    expect(screen.getByRole("heading", { name: "外观" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "用户设置" }).getAttribute("aria-current")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "API/MCPs配置" }));
+    expect(screen.getByRole("heading", { name: "API/MCPs配置" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "外观" }).getAttribute("aria-current")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "返回" }));
+    expect(screen.getByRole("button", { name: "新对话" })).toBeTruthy();
+  });
+
+  it("API 配置的本机环境读环境变量，自行填写读 .env", async () => {
+    const user = userEvent.setup();
+    const calls: ProbeRequest[] = [];
+    render(
+      <Workbench
+        api={immediateApi()}
+        loadSources={async () => ({
+          environment: { base_url: "http://env.test/v1", model: "env-model", has_api_key: true },
+          dotenv: { base_url: "http://file.test/v1", model: "file-model", has_api_key: true },
+        })}
+        probe={async (body) => {
+          calls.push(body);
+          return { reachable: body.source === "local" };
+        }}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "未登录" }));
+    await user.click(screen.getByRole("button", { name: "API/MCPs配置" }));
+
+    expect(screen.getByRole("radio", { name: "本机环境" })).toHaveProperty("checked", true);
+    expect(screen.getByRole("textbox", { name: "服务地址" })).toHaveProperty("value", "http://env.test/v1");
+    expect((await screen.findByRole("status")).textContent).toContain("已联通");
+    expect(calls[0]).toEqual({ source: "local" });
+
+    await user.click(screen.getByRole("radio", { name: "自行填写" }));
+    expect(screen.getByRole("textbox", { name: "服务地址" })).toHaveProperty("value", "http://file.test/v1");
+    expect(screen.getByRole("textbox", { name: "模型" })).toHaveProperty("value", "file-model");
+    expect(await screen.findByText("连不上这个模型服务。")).toBeTruthy();
+    expect(calls.at(-1)).toEqual({
+      source: "dotenv",
+      base_url: "http://file.test/v1",
+      model: "file-model",
+    });
+  });
+
   it("空会话显示名称和引导", () => {
     render(<Workbench api={immediateApi()} />);
 

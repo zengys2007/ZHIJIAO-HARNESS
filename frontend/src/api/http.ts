@@ -56,6 +56,55 @@ export const httpApi: ConversationApi = {
   getTask: async (taskId) => readTask(await request(`/api/tasks/${taskId}`)),
 };
 
+export type LlmPublic = {
+  base_url: string;
+  model: string;
+  has_api_key: boolean;
+};
+
+export type LlmSources = {
+  environment: LlmPublic;
+  dotenv: LlmPublic;
+};
+
+export type ProbeRequest =
+  | { source: "local" }
+  | { source: "dotenv"; base_url?: string; model?: string; api_key?: string };
+
+const EMPTY_LLM: LlmPublic = { base_url: "", model: "", has_api_key: false };
+
+export async function loadLlmSources(signal?: AbortSignal): Promise<LlmSources> {
+  const payload = await request("/api/llm/config", { signal });
+  if (!payload || typeof payload !== "object") return { environment: EMPTY_LLM, dotenv: EMPTY_LLM };
+  const record = payload as { environment?: unknown; dotenv?: unknown };
+  return {
+    environment: readPublicLlm(record.environment),
+    dotenv: readPublicLlm(record.dotenv),
+  };
+}
+
+export async function probeLlm(body: ProbeRequest, signal?: AbortSignal): Promise<{ reachable: boolean }> {
+  const payload = await request("/api/llm/probe", {
+    method: "POST",
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!payload || typeof payload !== "object" || typeof (payload as { reachable?: unknown }).reachable !== "boolean") {
+    throw new ApiRequestError("internal", "系统出错了，可以再发一次。", true, 200);
+  }
+  return { reachable: (payload as { reachable: boolean }).reachable };
+}
+
+function readPublicLlm(value: unknown): LlmPublic {
+  if (!value || typeof value !== "object") return EMPTY_LLM;
+  const record = value as { base_url?: unknown; model?: unknown; has_api_key?: unknown };
+  return {
+    base_url: typeof record.base_url === "string" ? record.base_url : "",
+    model: typeof record.model === "string" ? record.model : "",
+    has_api_key: record.has_api_key === true,
+  };
+}
+
 async function request(path: string, init?: RequestInit): Promise<unknown> {
   let response: Response;
   try {

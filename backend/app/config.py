@@ -14,6 +14,63 @@ class Settings:
     llm_timeout_seconds: int = 60
 
 
+_filled_from_file: dict[str, str] = {}
+
+
+def load_env_file(path: Path | None = None) -> None:
+    for key, value in read_dotenv_values(path).items():
+        if key and key not in os.environ:
+            os.environ[key] = value
+            _filled_from_file[key] = value
+
+
+def read_dotenv_values(path: Path | None = None) -> dict[str, str]:
+    env_path = default_env_path() if path is None else path
+    if not env_path.is_file():
+        return {}
+    values: dict[str, str] = {}
+    for raw in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+        if key:
+            values[key] = value
+    return values
+
+
+def default_env_path() -> Path:
+    return Path(__file__).resolve().parents[2] / ".env"
+
+
+def process_llm() -> dict[str, str]:
+    return {
+        "base_url": _process_value("LLM_BASE_URL"),
+        "api_key": _process_value("LLM_API_KEY"),
+        "model": _process_value("LLM_MODEL"),
+    }
+
+
+def _process_value(name: str) -> str:
+    current = os.environ.get(name, "").strip()
+    if name in _filled_from_file and current == _filled_from_file[name]:
+        return ""
+    return current
+
+
+def dotenv_llm(path: Path | None = None) -> dict[str, str]:
+    values = read_dotenv_values(path)
+    return {
+        "base_url": values.get("LLM_BASE_URL", "").strip(),
+        "api_key": values.get("LLM_API_KEY", "").strip(),
+        "model": values.get("LLM_MODEL", "").strip(),
+    }
+
+
 def load_settings() -> Settings:
     raw = os.environ.get("DATA_DIR", "data")
     base_url = os.environ.get("LLM_BASE_URL", "").strip()

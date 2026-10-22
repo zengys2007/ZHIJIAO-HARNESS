@@ -4,7 +4,7 @@
 
 本文是对话接口的字段契约。产品行为以 [MVP 路线](superpowers/specs/2026-10-21-mvp-roadmap.md) 为准。路径或状态含义有冲突时，先改路线，再改本文。
 
-范围只有下面四个接口。不包含 `GET /health`、工作台页面，也不包含产物预览、修改和导出。那些路由不在本契约里，实现对话时不要扩展它们。
+范围包括四个对话接口，以及第 7 节的模型试连。不包含 `GET /health`、工作台页面，也不包含产物预览、修改和导出。那些路由不在本契约里。实现对话时不要再扩展对话接口。
 
 ## 1. 共同约定
 
@@ -222,6 +222,34 @@
 
 本契约不使用 `needs_clarification` 和 `no_artifact`。
 
-## 7. 实现状态
+## 7. 试连模型
 
-四个对话接口已经挂在 `backend/app/main.py`。工作台源码在 `frontend/`，开发入口是 `frontend/index.html`。模型适配在 `backend/app/llm/complete.py`。单元测试注入假的 `complete`，不访问真实供应商。
+`GET /api/llm/config` 只返回两边的服务地址、模型名，以及是否已有密钥。响应里不出现密钥。
+
+`POST /api/llm/probe`
+
+只检查这一次能不能连上模型。不改进程里正在使用的配置，响应里不出现密钥。
+
+本机环境读取进程里的环境变量，不读 `.env` 文件：
+
+```json
+{ "source": "local" }
+```
+
+自行填写读取项目 `.env`。请求可以只带 `source`，缺的地址、模型和密钥用文件里的值。也可以带上改过的字段；没带 `api_key` 时仍用文件里的密钥：
+
+```json
+{ "source": "dotenv" }
+```
+
+200：
+
+```json
+{ "reachable": true }
+```
+
+连不上时同样是 200，`reachable` 为 `false`。字段不合法时仍是 `invalid_input`。
+
+## 8. 实现状态
+
+四个对话接口和一个模型试连接口已经挂在 `backend/app/main.py`。工作台源码在 `frontend/`，开发入口是 `frontend/index.html`。模型适配在 `backend/app/llm/complete.py`。单元测试注入假的 `complete` 和试连函数，不访问真实供应商。
