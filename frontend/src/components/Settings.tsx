@@ -1,29 +1,78 @@
 import { useEffect, useState } from "react";
 import { DisconnectError, loadLlmSources, probeLlm, type LlmSources, type ProbeRequest } from "../api/http";
+import type { AuthUser } from "../types/api";
 
 export type SettingsSection = "user" | "appearance" | "connections";
 
-const pages: Record<Exclude<SettingsSection, "connections">, { title: string; body: string }> = {
-  user: { title: "用户设置", body: "当前未登录。" },
-  appearance: { title: "外观", body: "当前是浅色工作台。" },
-};
+type UserProps =
+  | { authenticated: false; user?: undefined; onLogout?: undefined; logoutBusy?: undefined }
+  | {
+      authenticated: true;
+      user: AuthUser;
+      onLogout: () => Promise<void> | void;
+      logoutBusy: boolean;
+    };
 
 export function Settings({
   section,
   probe = probeLlm,
   loadSources = loadLlmSources,
+  ...userProps
 }: {
   section: SettingsSection;
   probe?: (body: ProbeRequest, signal?: AbortSignal) => Promise<{ reachable: boolean }>;
   loadSources?: (signal?: AbortSignal) => Promise<LlmSources>;
-}) {
+} & UserProps) {
   if (section === "connections") return <ApiConfig probe={probe} loadSources={loadSources} />;
-  const page = pages[section];
+  if (section === "appearance") {
+    return (
+      <section className="settings" aria-label="外观">
+        <div className="settings-column">
+          <h1>外观</h1>
+          <p>当前是浅色工作台。</p>
+        </div>
+      </section>
+    );
+  }
+  return <UserSettings {...userProps} />;
+}
+
+function UserSettings(props: UserProps) {
+  if (!props.authenticated) {
+    return (
+      <section className="settings" aria-label="用户设置">
+        <div className="settings-column">
+          <h1>用户设置</h1>
+          <p>请先登录。</p>
+        </div>
+      </section>
+    );
+  }
+  const { user, onLogout, logoutBusy } = props;
   return (
-    <section className="settings" aria-label={page.title}>
+    <section className="settings" aria-label="用户设置">
       <div className="settings-column">
-        <h1>{page.title}</h1>
-        <p>{page.body}</p>
+        <h1>用户设置</h1>
+        <dl className="user-profile">
+          <div>
+            <dt>显示名</dt>
+            <dd>{user.display_name}</dd>
+          </div>
+          <div>
+            <dt>用户名</dt>
+            <dd>{user.username}</dd>
+          </div>
+        </dl>
+        <button
+          type="button"
+          className="auth-submit auth-secondary"
+          disabled={logoutBusy}
+          onClick={() => {
+            void onLogout();
+          }}
+        >
+          {logoutBusy ? "正在退出" : "退出"}
+        </button>
       </div>
     </section>
   );

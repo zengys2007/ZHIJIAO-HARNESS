@@ -1,4 +1,5 @@
 import type { ConversationMessage } from "../types/api";
+import { ToolCallCard } from "./ToolCallCard";
 
 type Turn = {
   taskId: string;
@@ -6,7 +7,15 @@ type Turn = {
   assistant?: ConversationMessage;
 };
 
-export function Transcript({ messages, loading }: { messages: ConversationMessage[]; loading: boolean }) {
+type Props = {
+  messages: ConversationMessage[];
+  loading: boolean;
+  /** 透传给 ToolCallCard 的审批动作 */
+  onApprove?: (taskId: string, callId: string) => void;
+  onReject?: (taskId: string, callId: string) => void;
+};
+
+export function Transcript({ messages, loading, onApprove, onReject }: Props) {
   const turns = groupTurns(messages);
   if (loading) {
     return (
@@ -38,10 +47,12 @@ export function Transcript({ messages, loading }: { messages: ConversationMessag
               <p className="content">{turn.user.content}</p>
             </div>
             {turn.assistant ? (
-              <div className="bubble assistant">
-                <p className="who">智教harness</p>
-                <p className="content">{turn.assistant.content}</p>
-              </div>
+              <AssistantBlock
+                taskId={turn.taskId}
+                assistant={turn.assistant}
+                onApprove={onApprove}
+                onReject={onReject}
+              />
             ) : null}
             {turn.user.status === "pending" || turn.user.status === "running" ? (
               <p className="turn-status" role="status">
@@ -57,6 +68,44 @@ export function Transcript({ messages, loading }: { messages: ConversationMessag
         ))}
       </div>
     </section>
+  );
+}
+
+function AssistantBlock({
+  taskId,
+  assistant,
+  onApprove,
+  onReject,
+}: {
+  taskId: string;
+  assistant: ConversationMessage;
+  onApprove?: (taskId: string, callId: string) => void;
+  onReject?: (taskId: string, callId: string) => void;
+}) {
+  const hasCalls = (assistant.tool_calls?.length ?? 0) > 0;
+  const resultsById = new Map((assistant.tool_results ?? []).map((r) => [r.call_id, r]));
+
+  return (
+    <>
+      <div className="bubble assistant">
+        <p className="who">智教harness</p>
+        {assistant.content ? <p className="content">{assistant.content}</p> : null}
+      </div>
+      {hasCalls ? (
+        <div className="tool-list" aria-label="工具调用列表">
+          {assistant.tool_calls!.map((call) => (
+            <ToolCallCard
+              key={call.call_id}
+              call={call}
+              result={resultsById.get(call.call_id)}
+              onApprove={(callId) => onApprove?.(taskId, callId)}
+              onReject={(callId) => onReject?.(taskId, callId)}
+              disabled={call.approval_status !== "pending"}
+            />
+          ))}
+        </div>
+      ) : null}
+    </>
   );
 }
 

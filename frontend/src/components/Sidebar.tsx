@@ -1,5 +1,6 @@
 import type { SettingsSection } from "./Settings";
 import type { SessionSummary } from "../lib/sessions";
+import type { AuthUser } from "../types/api";
 
 type SidebarProps = {
   sessions: SessionSummary[];
@@ -13,6 +14,8 @@ type SidebarProps = {
   onSelect: (id: string) => void;
   onOpenSettings: () => void;
   onCloseSettings: () => void;
+  /** 已登录用户，或 null（未登录），或 undefined（正在确认） */
+  user: AuthUser | null | undefined;
 };
 
 export function Sidebar({
@@ -27,7 +30,11 @@ export function Sidebar({
   onSelect,
   onOpenSettings,
   onCloseSettings,
+  user,
 }: SidebarProps) {
+  const loggedIn = user !== null && user !== undefined;
+  const accountLabel =
+    user === undefined ? "正在确认登录…" : user ? user.display_name : "未登录";
   return (
     <aside className="sidebar">
       {settingsOpen ? (
@@ -38,15 +45,16 @@ export function Sidebar({
           activeId={activeId}
           busy={busy}
           preview={preview}
+          loggedIn={loggedIn}
           onNew={onNew}
           onSelect={onSelect}
         />
       )}
       <button className="account" type="button" aria-current={settingsOpen ? "page" : undefined} onClick={onOpenSettings}>
         <span className="avatar" aria-hidden="true">
-          <GuestMark />
+          {loggedIn ? <UserMark /> : <GuestMark />}
         </span>
-        <span className="account-name">未登录</span>
+        <span className="account-name">{accountLabel}</span>
       </button>
     </aside>
   );
@@ -57,6 +65,7 @@ function ChatNav({
   activeId,
   busy,
   preview,
+  loggedIn,
   onNew,
   onSelect,
 }: {
@@ -64,6 +73,7 @@ function ChatNav({
   activeId: string | null;
   busy: boolean;
   preview: boolean;
+  loggedIn: boolean;
   onNew: () => void;
   onSelect: (id: string) => void;
 }) {
@@ -75,10 +85,14 @@ function ChatNav({
         </span>
         <p className="brand">智教harness</p>
       </div>
-      <button className="new-chat" type="button" onClick={onNew} disabled={busy}>
+      <button className="new-chat" type="button" onClick={onNew} disabled={busy || !loggedIn}>
         新对话
       </button>
-      {preview ? <p className="preview-note">本机服务未连接，当前只预览界面。</p> : null}
+      {!loggedIn && !preview ? (
+        <p className="preview-note">请先登录。</p>
+      ) : preview ? (
+        <p className="preview-note">本机服务未连接，当前只预览界面。</p>
+      ) : null}
       <div className="session-scroll">
         {sessions.length === 0 ? (
           <p className="empty-list">还没有会话</p>
@@ -218,6 +232,15 @@ function BackArrow() {
 }
 
 function GuestMark() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" focusable="false">
+      <circle cx="12" cy="8" r="3.2" fill="currentColor" />
+      <path fill="currentColor" d="M12 13.4c-3.7 0-6.6 1.9-6.9 5h13.8c-.3-3.1-3.2-5-6.9-5z" />
+    </svg>
+  );
+}
+
+function UserMark() {
   return (
     <svg viewBox="0 0 24 24" width="18" height="18" focusable="false">
       <circle cx="12" cy="8" r="3.2" fill="currentColor" />

@@ -1,7 +1,9 @@
 import type {
   ApiErrorBody,
+  AuthUser,
   ConversationApi,
   ConversationMessage,
+  ConversationSummary,
   TaskSnapshot,
   TaskStatus,
 } from "../types/api";
@@ -54,6 +56,9 @@ export const httpApi: ConversationApi = {
     };
   },
   getTask: async (taskId) => readTask(await request(`/api/tasks/${taskId}`)),
+  // 生产后端暂未实现审批端点，stub：直接返回，不抛错，让 UI 能在预览模式下正常工作
+  approveCall: async () => {},
+  rejectCall: async () => {},
 };
 
 export type LlmPublic = {
@@ -110,9 +115,11 @@ async function request(path: string, init?: RequestInit): Promise<unknown> {
   try {
     response = await fetch(path, {
       ...init,
+      credentials: "include",
       headers: {
         Accept: "application/json",
         ...(init?.body ? { "Content-Type": "application/json; charset=utf-8" } : {}),
+        ...(init?.headers ?? {}),
       },
     });
   } catch (error) {
@@ -121,6 +128,8 @@ async function request(path: string, init?: RequestInit): Promise<unknown> {
   }
 
   const text = await response.text();
+  // 5xx 或 Vite proxy 在后端没启动时返回的 500 → 一律视为连接中断，切 preview
+  if (response.status >= 500) throw new DisconnectError();
   const body = parseBody(text, response.status);
   if (response.ok) return body;
 
@@ -131,6 +140,83 @@ async function request(path: string, init?: RequestInit): Promise<unknown> {
     error?.retryable ?? true,
     response.status,
   );
+}
+
+// ===== auth =====
+
+export async function getCurrentUser(): Promise<AuthUser | null> {
+  try {
+    const body = await request("/api/auth/me");
+    return readAuthUser(body);
+  } catch (error) {
+    if (error instanceof ApiRequestError && error.status === 401) return null;
+    throw error;
+  }
+}
+
+export async function login(username: string, password: string): Promise<AuthUser> {
+  const body = await request("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ username, password }),
+  });
+  return readAuthUser(body);
+}
+
+export async function register(
+  username: string,
+  password: string,
+  displayName?: string,
+): Promise<AuthUser> {
+  const payload: Record<string, string> = { username, password };
+  if (displayName && displayName.trim()) payload.display_name = displayName.trim();
+  const body = await request("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  return readAuthUser(body);
+}
+
+export async function logout(): Promise<void> {
+  try {
+    await request("/api/auth/logout", { method: "POST" });
+  } catch (error) {
+    // 已登录用户的正常退出：后端会先删掉会话行、清 Cookie，再返回 204。
+    // 401 也是合法返回（未登录调用 logout），此时 Cookie 已清掉，前端照样回到登录画面。
+    if (!(error instanceof ApiRequestError) || error.status !== 401) throw error;
+  }
+}
+
+export async function listConversations(): Promise<ConversationSummary[]> {
+  const body = await request("/api/conversations");
+  const record = recordOf(body) as { conversations?: unknown };
+  if (!Array.isArray(record.conversations)) return [];
+  return record.conversations
+    .map((c) => {
+      const r = recordOf(c) as Record<string, unknown>;
+      return {
+        conversation_id: typeof r.conversation_id === "string" && ID.test(r.conversation_id) ? r.conversation_id : "",
+        title: typeof r.title === "string" ? r.title : "新对话",
+        created_at: typeof r.created_at === "string" ? r.created_at : "",
+      };
+    })
+    .filter((c) => c.conversation_id.length > 0);
+}
+
+function readAuthUser(body: unknown): AuthUser {
+  const r = recordOf(body);
+  if (
+    typeof r.username !== "string" ||
+    typeof r.display_name !== "string" ||
+    typeof r.user_id !== "string" ||
+    !ID.test(r.user_id)
+  ) {
+    throw new ApiRequestError("internal", "系统出错了，可以再发一次。", true, 200);
+  }
+  return {
+    user_id: r.user_id,
+    username: r.username,
+    display_name: r.display_name,
+  };
 }
 
 function parseBody(text: string, status: number): unknown {

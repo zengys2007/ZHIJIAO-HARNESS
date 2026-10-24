@@ -1,11 +1,18 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
-import type { ConversationApi, ConversationMessage, TaskSnapshot } from "../types/api";
+import type { AuthUser, ConversationApi, ConversationMessage, TaskSnapshot } from "../types/api";
 import type { ProbeRequest } from "../api/http";
 import { Workbench } from "./Workbench";
 
 const conversationId = "0123456789abcdef0123456789abcdef";
+const defaultUser: AuthUser = {
+  user_id: "fedcba9876543210fedcba9876543210",
+  username: "teacher",
+  display_name: "王老师",
+};
+const noopUser = async () => defaultUser;
+const noopList = async () => [];
 
 afterEach(() => {
   cleanup();
@@ -13,13 +20,46 @@ afterEach(() => {
   localStorage.clear();
 });
 
+/** 已登录的 Workbench 渲染辅助 */
+function renderLoggedIn(opts: {
+  api?: ConversationApi;
+  loadSources?: () => Promise<{ environment: { base_url: string; model: string; has_api_key: boolean }; dotenv: { base_url: string; model: string; has_api_key: boolean } }>;
+  probe?: (body: ProbeRequest, signal?: AbortSignal) => Promise<{ reachable: boolean }>;
+} = {}) {
+  return render(
+    <Workbench
+      api={opts.api ?? immediateApi()}
+      loadSources={opts.loadSources}
+      probe={opts.probe}
+      getCurrentUser={noopUser}
+      listConversationsAuth={noopList}
+    />,
+  );
+}
+
+/** 未登录的 Workbench 渲染辅助 */
+function renderLoggedOut(opts: {
+  loadSources?: () => Promise<{ environment: { base_url: string; model: string; has_api_key: boolean }; dotenv: { base_url: string; model: string; has_api_key: boolean } }>;
+  probe?: (body: ProbeRequest, signal?: AbortSignal) => Promise<{ reachable: boolean }>;
+} = {}) {
+  return render(
+    <Workbench
+      getCurrentUser={async () => null}
+      listConversationsAuth={noopList}
+      loadSources={opts.loadSources}
+      probe={opts.probe}
+    />,
+  );
+}
+
 describe("工作台", () => {
   it("左下角显示未登录，点击后左侧变成设置导航", async () => {
     const user = userEvent.setup();
-    render(<Workbench api={immediateApi()} />);
+    renderLoggedOut();
 
-    expect(screen.getByRole("button", { name: "未登录" }).textContent).toContain("未登录");
-    await user.click(screen.getByRole("button", { name: "未登录" }));
+    const accountBtn = await screen.findByRole("button", { name: "未登录" });
+    expect(accountBtn.textContent).toContain("未登录");
+    await user.click(accountBtn);
 
     expect(screen.queryByRole("button", { name: "新对话" })).toBeNull();
     expect(screen.getByRole("navigation", { name: "设置" })).toBeTruthy();
@@ -35,27 +75,24 @@ describe("工作台", () => {
     expect(screen.getByRole("button", { name: "外观" }).getAttribute("aria-current")).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "返回" }));
-    expect(screen.getByRole("button", { name: "新对话" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "登录" })).toBeTruthy();
   });
 
   it("API 配置的本机环境读环境变量，自行填写读 .env", async () => {
     const user = userEvent.setup();
     const calls: ProbeRequest[] = [];
-    render(
-      <Workbench
-        api={immediateApi()}
-        loadSources={async () => ({
-          environment: { base_url: "http://env.test/v1", model: "env-model", has_api_key: true },
-          dotenv: { base_url: "http://file.test/v1", model: "file-model", has_api_key: true },
-        })}
-        probe={async (body) => {
-          calls.push(body);
-          return { reachable: body.source === "local" };
-        }}
-      />,
-    );
+    renderLoggedOut({
+      loadSources: async () => ({
+        environment: { base_url: "http://env.test/v1", model: "env-model", has_api_key: true },
+        dotenv: { base_url: "http://file.test/v1", model: "file-model", has_api_key: true },
+      }),
+      probe: async (body) => {
+        calls.push(body);
+        return { reachable: body.source === "local" };
+      },
+    });
 
-    await user.click(screen.getByRole("button", { name: "未登录" }));
+    await user.click(await screen.findByRole("button", { name: "未登录" }));
     await user.click(screen.getByRole("button", { name: "API/MCPs配置" }));
 
     expect(screen.getByRole("radio", { name: "本机环境" })).toHaveProperty("checked", true);
@@ -74,10 +111,10 @@ describe("工作台", () => {
     });
   });
 
-  it("空会话显示名称和引导", () => {
-    render(<Workbench api={immediateApi()} />);
+  it("空会话显示名称和引导", async () => {
+    renderLoggedIn();
 
-    expect(screen.getByRole("heading", { name: "智教harness" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "智教harness" })).toBeTruthy();
     expect(screen.getByText("用一句话说说这节课。回复会出现在这里。")).toBeTruthy();
     expect(screen.getByRole("button", { name: "发送" })).toHaveProperty("disabled", true);
   });
@@ -89,8 +126,9 @@ describe("工作台", () => {
       release = resolve;
     });
     const api = scriptedApi([gate]);
-    render(<Workbench api={api} />);
+    renderLoggedIn({ api });
 
+    await screen.findByRole("button", { name: "发送" });
     await user.type(screen.getByRole("textbox", { name: "消息" }), "这节课怎么讲通分");
     await user.click(screen.getByRole("button", { name: "发送" }));
 
@@ -109,8 +147,9 @@ describe("工作台", () => {
       Promise.resolve(succeeded("可以先用同一块饼分成不同份数。")),
       Promise.resolve(failed("模型响应超时，可以再发一次。")),
     ]);
-    render(<Workbench api={api} />);
+    renderLoggedIn({ api });
 
+    await screen.findByRole("button", { name: "发送" });
     await user.type(screen.getByRole("textbox", { name: "消息" }), "这节课怎么讲通分");
     await user.click(screen.getByRole("button", { name: "发送" }));
     expect(await screen.findByText("可以先用同一块饼分成不同份数。")).toBeTruthy();
@@ -132,14 +171,48 @@ describe("工作台", () => {
       sent += 1;
       return original(...args);
     };
-    render(<Workbench api={api} />);
+    renderLoggedIn({ api });
 
+    await screen.findByRole("button", { name: "发送" });
     await user.click(screen.getByRole("textbox", { name: "消息" }));
     await user.paste("课".repeat(4001));
     await user.click(screen.getByRole("button", { name: "发送" }));
 
     expect(screen.getByRole("alert").textContent).toContain("请把这句话写成 1 到 4000 字后再发送。");
     expect(sent).toBe(0);
+  });
+
+  it("加号菜单：权限项与左下角审批控制器同步切换", async () => {
+    const user = userEvent.setup();
+    renderLoggedIn();
+    await screen.findByRole("button", { name: "发送" });
+
+    // 初始为手动审批
+    expect(screen.getByRole("button", { name: "审批模式" }).textContent).toContain("手动审批");
+
+    // 打开加号菜单，点权限项切换
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    expect(screen.getByRole("menuitem", { name: /权限/ }).textContent).toContain("当前：手动审批");
+    await user.click(screen.getByRole("menuitem", { name: /权限/ }));
+
+    // 左下角审批控制器同步变为自动执行
+    expect(screen.getByRole("button", { name: "审批模式" }).textContent).toContain("自动执行");
+    // 菜单项描述同步更新
+    expect(screen.getByRole("menuitem", { name: /权限/ }).textContent).toContain("当前：自动执行");
+  });
+
+  it("加号菜单：未实现项点击后弹出尚未开放提示", async () => {
+    const user = userEvent.setup();
+    renderLoggedIn();
+    await screen.findByRole("button", { name: "发送" });
+
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    await user.click(screen.getByRole("menuitem", { name: /模型/ }));
+
+    // 菜单关闭，出现 toast
+    expect(screen.queryByRole("menu")).toBeNull();
+    const status = screen.getByRole("status");
+    expect(status.textContent).toContain("该功能尚未开放");
   });
 });
 
@@ -207,5 +280,7 @@ function scriptedApi(results: Array<Promise<TaskSnapshot>>): ConversationApi {
     async getTask() {
       return results[Math.min(cursor - 1, results.length - 1)];
     },
+    async approveCall() {},
+    async rejectCall() {},
   };
 }
