@@ -431,6 +431,9 @@ export function Workbench({
         onSelect={handleSelect}
         onOpenSettings={() => setView("settings")}
         onCloseSettings={() => setView("chat")}
+        onLogout={() => {
+          void doLogout();
+        }}
         user={user}
       />
       <main className="main">
@@ -442,8 +445,6 @@ export function Workbench({
               loadSources={loadSources}
               authenticated
               user={user!}
-              onLogout={doLogout}
-              logoutBusy={logoutBusy}
             />
           ) : (
             <Settings section={settingsSection} probe={probe} loadSources={loadSources} authenticated={false} />

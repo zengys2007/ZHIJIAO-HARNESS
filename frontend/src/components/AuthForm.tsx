@@ -39,6 +39,10 @@ const USERNAME_ERROR = "用户名写成 1 到 32 个字，中间不要有空格�
 const PASSWORD_ERROR = "密码写成 8 到 128 个字。";
 const DISPLAY_NAME_ERROR = "显示名写成 1 到 32 个字。";
 
+// 演示账号：本地开发库里的冒烟账号，仅用于一键填充演示
+const DEMO_USERNAME = "smoketest";
+const DEMO_PASSWORD = "smoke-test-123";
+
 export function AuthForm({ onLogin, onRegister }: Props) {
   const [mode, setMode] = useState<Mode>("login");
   const [username, setUsername] = useState("");
@@ -86,6 +90,13 @@ export function AuthForm({ onLogin, onRegister }: Props) {
     setMode(next);
     setClientErrors({});
     setBanner(null);
+  }
+
+  /** 一键填充演示账号：只填入表单，不提交登录 */
+  function fillDemo() {
+    setUsername(DEMO_USERNAME);
+    setPassword(DEMO_PASSWORD);
+    setClientErrors({});
   }
 
   return (
@@ -176,6 +187,11 @@ export function AuthForm({ onLogin, onRegister }: Props) {
               </>
             )}
           </p>
+          {isLogin ? (
+            <button type="button" className="auth-demo-fill" disabled={submitting} onClick={fillDemo}>
+              填充演示账号
+            </button>
+          ) : null}
         </form>
       </div>
     </div>

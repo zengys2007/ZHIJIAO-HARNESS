@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import type { SettingsSection } from "./Settings";
 import type { SessionSummary } from "../lib/sessions";
 import type { AuthUser } from "../types/api";
@@ -14,6 +15,8 @@ type SidebarProps = {
   onSelect: (id: string) => void;
   onOpenSettings: () => void;
   onCloseSettings: () => void;
+  /** 头像菜单里的退出登录 */
+  onLogout: () => void;
   /** 已登录用户，或 null（未登录），或 undefined（正在确认） */
   user: AuthUser | null | undefined;
 };
@@ -30,11 +33,32 @@ export function Sidebar({
   onSelect,
   onOpenSettings,
   onCloseSettings,
+  onLogout,
   user,
 }: SidebarProps) {
   const loggedIn = user !== null && user !== undefined;
   const accountLabel =
     user === undefined ? "正在确认登录…" : user ? user.display_name : "未登录";
+  const [menuOpen, setMenuOpen] = useState(false);
+  const accountRef = useRef<HTMLDivElement | null>(null);
+
+  // 菜单打开时：点击外部 / Esc 关闭
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handleDoc = (e: MouseEvent) => {
+      if (accountRef.current && !accountRef.current.contains(e.target as Node)) setMenuOpen(false);
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", handleDoc);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleDoc);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [menuOpen]);
+
   return (
     <aside className="sidebar">
       {settingsOpen ? (
@@ -50,12 +74,60 @@ export function Sidebar({
           onSelect={onSelect}
         />
       )}
-      <button className="account" type="button" aria-current={settingsOpen ? "page" : undefined} onClick={onOpenSettings}>
-        <span className="avatar" aria-hidden="true">
-          {loggedIn ? <UserMark /> : <GuestMark />}
-        </span>
-        <span className="account-name">{accountLabel}</span>
-      </button>
+      <div className="account-inline" ref={accountRef}>
+        <button
+          className="account"
+          type="button"
+          aria-current={settingsOpen ? "page" : undefined}
+          aria-haspopup={loggedIn ? "menu" : undefined}
+          aria-expanded={loggedIn ? menuOpen : undefined}
+          onClick={() => {
+            if (loggedIn) {
+              setMenuOpen((o) => !o);
+            } else {
+              onOpenSettings();
+            }
+          }}
+        >
+          <span className="avatar" aria-hidden="true">
+            {loggedIn ? <UserMark /> : <GuestMark />}
+          </span>
+          <span className="account-name">{accountLabel}</span>
+          {loggedIn ? (
+            <span className="account-caret" aria-hidden="true">
+              {menuOpen ? "▴" : "▾"}
+            </span>
+          ) : null}
+        </button>
+        {loggedIn && menuOpen ? (
+          <div className="account-menu" role="menu" aria-label="账号操作">
+            <button
+              type="button"
+              role="menuitem"
+              className="account-menu-item"
+              onClick={() => {
+                setMenuOpen(false);
+                onOpenSettings();
+              }}
+            >
+              <GearIcon />
+              设置
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="account-menu-item is-danger"
+              onClick={() => {
+                setMenuOpen(false);
+                onLogout();
+              }}
+            >
+              <LogoutIcon />
+              退出登录
+            </button>
+          </div>
+        ) : null}
+      </div>
     </aside>
   );
 }
@@ -221,6 +293,36 @@ function BackArrow() {
     <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">
       <path
         d="M14.5 5.5 8 12l6.5 6.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function GearIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+      <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="1.8" />
+      <path
+        d="M12 3.8v2.4M12 17.8v2.4M4.6 12H7M17 12h2.4M6.6 6.6l1.7 1.7M15.7 15.7l1.7 1.7M17.4 6.6l-1.7 1.7M8.3 15.7l-1.7 1.7"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function LogoutIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+      <path
+        d="M13 4.5H7a1.5 1.5 0 0 0-1.5 1.5v12A1.5 1.5 0 0 0 7 19.5h6M10.5 12h9m0 0-3-3m3 3-3 3"
         fill="none"
         stroke="currentColor"
         strokeWidth="1.8"

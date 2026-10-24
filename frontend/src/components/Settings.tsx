@@ -5,12 +5,10 @@ import type { AuthUser } from "../types/api";
 export type SettingsSection = "user" | "appearance" | "connections";
 
 type UserProps =
-  | { authenticated: false; user?: undefined; onLogout?: undefined; logoutBusy?: undefined }
+  | { authenticated: false; user?: undefined }
   | {
       authenticated: true;
       user: AuthUser;
-      onLogout: () => Promise<void> | void;
-      logoutBusy: boolean;
     };
 
 export function Settings({
@@ -48,7 +46,7 @@ function UserSettings(props: UserProps) {
       </section>
     );
   }
-  const { user, onLogout, logoutBusy } = props;
+  const { user } = props;
   return (
     <section className="settings" aria-label="用户设置">
       <div className="settings-column">
@@ -63,16 +61,6 @@ function UserSettings(props: UserProps) {
             <dd>{user.username}</dd>
           </div>
         </dl>
-        <button
-          type="button"
-          className="auth-submit auth-secondary"
-          disabled={logoutBusy}
-          onClick={() => {
-            void onLogout();
-          }}
-        >
-          {logoutBusy ? "正在退出" : "退出"}
-        </button>
       </div>
     </section>
   );

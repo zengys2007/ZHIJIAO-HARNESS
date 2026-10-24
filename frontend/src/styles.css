@@ -1313,3 +1313,86 @@ button:focus-visible {
     transform: translateY(0);
   }
 }
+
+/* ===== 登录界面：一键填充演示账号 ===== */
+.auth-demo-fill {
+  margin-top: 10px;
+  height: 32px;
+  border: 1px dashed #b7c6be;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--faint);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+
+.auth-demo-fill:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--on-accent);
+}
+
+.auth-demo-fill:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ===== 侧栏底部账号菜单（点击头像弹出） ===== */
+.account-inline {
+  position: relative;
+  width: 100%;
+  margin-top: 8px;
+}
+
+.account-inline .account {
+  margin-top: 0;
+}
+
+.account-caret {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--faint);
+}
+
+.account-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  z-index: 50;
+  width: 168px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--white);
+  box-shadow: var(--shadow);
+}
+
+.account-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.account-menu-item:hover {
+  background: #f1f5f3;
+}
+
+.account-menu-item.is-danger {
+  color: #b3372f;
+}
+
+.account-menu-item.is-danger:hover {
+  background: #fbeeec;
+}

@@ -25,6 +25,7 @@ function renderLoggedIn(opts: {
   api?: ConversationApi;
   loadSources?: () => Promise<{ environment: { base_url: string; model: string; has_api_key: boolean }; dotenv: { base_url: string; model: string; has_api_key: boolean } }>;
   probe?: (body: ProbeRequest, signal?: AbortSignal) => Promise<{ reachable: boolean }>;
+  logout?: () => Promise<void>;
 } = {}) {
   return render(
     <Workbench
@@ -33,6 +34,7 @@ function renderLoggedIn(opts: {
       probe={opts.probe}
       getCurrentUser={noopUser}
       listConversationsAuth={noopList}
+      logoutFn={opts.logout}
     />,
   );
 }
@@ -213,6 +215,41 @@ describe("工作台", () => {
     expect(screen.queryByRole("menu")).toBeNull();
     const status = screen.getByRole("status");
     expect(status.textContent).toContain("该功能尚未开放");
+  });
+
+  it("登录界面：一键填充演示账号（只填充不登录）", async () => {
+    const user = userEvent.setup();
+    renderLoggedOut();
+    const usernameInput = (await screen.findByLabelText(/用户名/)) as HTMLInputElement;
+    const passwordInput = screen.getByLabelText(/密码/) as HTMLInputElement;
+
+    await user.click(screen.getByRole("button", { name: "填充演示账号" }));
+
+    expect(usernameInput.value).toBe("smoketest");
+    expect(passwordInput.value).toBe("smoke-test-123");
+    // 不自动提交：仍停留在登录表单
+    expect(screen.getByRole("button", { name: "登录" })).toBeTruthy();
+  });
+
+  it("头像菜单：点击头像显示设置与退出登录两个选项", async () => {
+    const user = userEvent.setup();
+    renderLoggedIn({ logout: async () => {} });
+    const accountBtn = await screen.findByRole("button", { name: /王老师/ });
+
+    // 点击头像弹出菜单，包含两个选项
+    await user.click(accountBtn);
+    expect(screen.getByRole("menuitem", { name: "设置" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "退出登录" })).toBeTruthy();
+
+    // 设置项 → 进入设置导航
+    await user.click(screen.getByRole("menuitem", { name: "设置" }));
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.getByRole("button", { name: "用户设置" })).toBeTruthy();
+
+    // 重新打开菜单 → 退出登录 → 回到登录表单
+    await user.click(accountBtn);
+    await user.click(screen.getByRole("menuitem", { name: "退出登录" }));
+    await screen.findByRole("button", { name: "登录" });
   });
 });
 
