@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { DisconnectError, loadLlmSources, probeLlm, type LlmSources, type ProbeRequest } from "../api/http";
+import { FONT_MAX, FONT_MIN, useAppearance, type ThemeChoice } from "../lib/appearance";
 import type { AuthUser } from "../types/api";
 
 export type SettingsSection = "user" | "appearance" | "connections";
@@ -22,42 +23,153 @@ export function Settings({
   loadSources?: (signal?: AbortSignal) => Promise<LlmSources>;
 } & UserProps) {
   if (section === "connections") return <ApiConfig probe={probe} loadSources={loadSources} />;
-  if (section === "appearance") {
-    return (
-      <section className="settings" aria-label="外观">
-        <div className="settings-column">
-          <h1>外观</h1>
-          <p>当前是浅色工作台。</p>
-        </div>
-      </section>
-    );
-  }
+  if (section === "appearance") return <AppearanceSettings />;
   return <UserSettings {...userProps} />;
 }
 
+function AppearanceSettings() {
+  const { theme, locale, fontScale, setTheme, setLocale, setFontScale, t } = useAppearance();
+  const choices: { id: ThemeChoice; label: string; icon: ReactNode }[] = [
+    { id: "light", label: t("themeLight"), icon: <SunIcon /> },
+    { id: "dark", label: t("themeDark"), icon: <MoonIcon /> },
+    { id: "system", label: t("themeSystem"), icon: <ComputerIcon /> },
+  ];
+
+  return (
+    <section className="settings" aria-label={t("appearance")}>
+      <div className="settings-column">
+        <h1>{t("appearance")}</h1>
+        <div className="appearance-block">
+          <p className="appearance-label" id="theme-label">
+            {t("theme")}
+          </p>
+          <div className="theme-choices" role="radiogroup" aria-labelledby="theme-label">
+            {choices.map((choice) => (
+              <button
+                key={choice.id}
+                type="button"
+                role="radio"
+                className="theme-choice"
+                aria-checked={theme === choice.id}
+                onClick={() => setTheme(choice.id)}
+              >
+                {choice.icon}
+                <span>{choice.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="appearance-block">
+          <p className="appearance-label">{t("language")}</p>
+          <div className="segment" role="radiogroup" aria-label={t("language")}>
+            <label className={locale === "zh" ? "is-selected" : undefined}>
+              <input
+                type="radio"
+                name="appearance-locale"
+                value="zh"
+                checked={locale === "zh"}
+                onChange={() => setLocale("zh")}
+              />
+              中文
+            </label>
+            <label className={locale === "en" ? "is-selected" : undefined}>
+              <input
+                type="radio"
+                name="appearance-locale"
+                value="en"
+                checked={locale === "en"}
+                onChange={() => setLocale("en")}
+              />
+              English
+            </label>
+          </div>
+        </div>
+        <div className="appearance-block">
+          <p className="appearance-label" id="font-size-label">
+            {t("fontSize")}
+          </p>
+          <div className="font-size-row">
+            <span>{t("fontSmall")}</span>
+            <input
+              type="range"
+              min={FONT_MIN}
+              max={FONT_MAX}
+              step={0.125}
+              value={fontScale}
+              aria-labelledby="font-size-label"
+              onChange={(event) => setFontScale(Number(event.target.value))}
+            />
+            <span>{t("fontLarge")}</span>
+            <span className="font-size-value">{Math.round(fontScale * 16)}</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function SunIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">
+      <circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" strokeWidth="1.8" />
+      <path
+        d="M12 3.5v2.2M12 18.3v2.2M3.5 12h2.2M18.3 12h2.2M6 6l1.6 1.6M16.4 16.4 18 18M18 6l-1.6 1.6M7.6 16.4 6 18"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function MoonIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">
+      <path
+        d="M15.5 3.8a7.8 7.8 0 1 0 4.7 12.6A8.2 8.2 0 0 1 15.5 3.8z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function ComputerIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">
+      <rect x="3.5" y="4.5" width="17" height="11.5" rx="1.6" fill="none" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M8 19.5h8M12 16v3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function UserSettings(props: UserProps) {
+  const { t } = useAppearance();
   if (!props.authenticated) {
     return (
-      <section className="settings" aria-label="用户设置">
+      <section className="settings" aria-label={t("userSettings")}>
         <div className="settings-column">
-          <h1>用户设置</h1>
-          <p>请先登录。</p>
+          <h1>{t("userSettings")}</h1>
+          <p>{t("signInFirst")}</p>
         </div>
       </section>
     );
   }
   const { user } = props;
   return (
-    <section className="settings" aria-label="用户设置">
+    <section className="settings" aria-label={t("userSettings")}>
       <div className="settings-column">
-        <h1>用户设置</h1>
+        <h1>{t("userSettings")}</h1>
         <dl className="user-profile">
           <div>
-            <dt>显示名</dt>
+            <dt>{t("displayName")}</dt>
             <dd>{user.display_name}</dd>
           </div>
           <div>
-            <dt>用户名</dt>
+            <dt>{t("username")}</dt>
             <dd>{user.username}</dd>
           </div>
         </dl>
@@ -73,6 +185,7 @@ function ApiConfig({
   probe: (body: ProbeRequest, signal?: AbortSignal) => Promise<{ reachable: boolean }>;
   loadSources: (signal?: AbortSignal) => Promise<LlmSources>;
 }) {
+  const { t } = useAppearance();
   const [source, setSource] = useState<"local" | "dotenv">("local");
   const [sources, setSources] = useState<LlmSources | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -135,19 +248,19 @@ function ApiConfig({
   const shownModel = dotenv ? model : environment?.model ?? "";
   const keyPlaceholder = dotenv
     ? sources?.dotenv.has_api_key
-      ? "留空则使用 .env 里的密钥"
-      : "填写密钥"
+      ? t("keyKeep")
+      : t("keyEnter")
     : environment?.has_api_key
-      ? "来自环境变量"
-      : "未设置环境变量";
+      ? t("keyFromEnv")
+      : t("keyMissing");
 
   return (
-    <section className="settings" aria-label="API/MCPs配置">
+    <section className="settings" aria-label={t("connections")}>
       <div className="settings-column">
-        <h1>API/MCPs配置</h1>
-        <p className="settings-lead">本机环境读取环境变量。自行填写读取 .env，留空的密钥仍用文件里的那一份。</p>
+        <h1>{t("connections")}</h1>
+        <p className="settings-lead">{t("apiLead")}</p>
         <form className="api-form" onSubmit={(event) => event.preventDefault()}>
-          <div className="segment" role="radiogroup" aria-label="接口来源">
+          <div className="segment" role="radiogroup" aria-label={t("source")}>
             <label className={source === "local" ? "is-selected" : undefined}>
               <input
                 type="radio"
@@ -156,7 +269,7 @@ function ApiConfig({
                 checked={source === "local"}
                 onChange={() => setSource("local")}
               />
-              本机环境
+              {t("localEnv")}
             </label>
             <label className={source === "dotenv" ? "is-selected" : undefined}>
               <input
@@ -166,35 +279,35 @@ function ApiConfig({
                 checked={source === "dotenv"}
                 onChange={() => setSource("dotenv")}
               />
-              自行填写
+              {t("customEnv")}
             </label>
           </div>
           <div className="api-card">
             <label className="api-row">
-              <span>服务地址</span>
+              <span>{t("serviceUrl")}</span>
               <input
                 name="base-url"
                 type="url"
                 value={shownUrl}
-                placeholder={dotenv ? "http://127.0.0.1:9" : "未设置环境变量"}
+                placeholder={dotenv ? "http://127.0.0.1:9" : t("urlMissing")}
                 disabled={!dotenv}
                 autoComplete="off"
                 onChange={(event) => setBaseUrl(event.target.value)}
               />
             </label>
             <label className="api-row">
-              <span>模型</span>
+              <span>{t("modelName")}</span>
               <input
                 name="model"
                 value={shownModel}
-                placeholder={dotenv ? "模型名称" : "未设置环境变量"}
+                placeholder={dotenv ? t("modelMissing") : t("urlMissing")}
                 disabled={!dotenv}
                 autoComplete="off"
                 onChange={(event) => setModel(event.target.value)}
               />
             </label>
             <label className="api-row">
-              <span>密钥</span>
+              <span>{t("secret")}</span>
               <input
                 name="api-key"
                 type="password"
@@ -206,17 +319,17 @@ function ApiConfig({
               />
             </label>
             <div className="api-row probe-row">
-              <span>联通</span>
+              <span>{t("connected")}</span>
               <div className="probe-status">
                 <span className="lamp" data-state={probeState} aria-hidden="true" />
                 <p className="probe-label" role="status">
-                  {probeCopy(probeState)}
+                  {probeCopy(probeState, t)}
                 </p>
               </div>
             </div>
           </div>
         </form>
-        <p className="hint api-note">MCP 还没有接入。页面不显示密钥。</p>
+        <p className="hint api-note">{t("mcpNote")}</p>
       </div>
     </section>
   );
@@ -228,11 +341,11 @@ function environmentReady(value: { base_url: string; model: string; has_api_key:
   return Boolean(value && value.base_url && value.model && value.has_api_key);
 }
 
-function probeCopy(state: ProbeState): string {
-  if (state === "checking") return "正在检测";
-  if (state === "up") return "已联通";
-  if (state === "down") return "连不上这个模型服务。";
-  if (state === "offline") return "暂时连不上本机服务。";
-  if (state === "unset") return "未配置环境变量";
-  return "未检测";
+function probeCopy(state: ProbeState, t: (key: "checking" | "reachable" | "unreachable" | "offlineService" | "unsetEnv" | "notChecked") => string): string {
+  if (state === "checking") return t("checking");
+  if (state === "up") return t("reachable");
+  if (state === "down") return t("unreachable");
+  if (state === "offline") return t("offlineService");
+  if (state === "unset") return t("unsetEnv");
+  return t("notChecked");
 }

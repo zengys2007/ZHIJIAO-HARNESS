@@ -1,8 +1,8 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AuthUser, ConversationApi, ConversationMessage, TaskSnapshot } from "../types/api";
-import type { ProbeRequest } from "../api/http";
+import { ApiRequestError, type ProbeRequest } from "../api/http";
 import { Workbench } from "./Workbench";
 
 const conversationId = "0123456789abcdef0123456789abcdef";
@@ -26,6 +26,7 @@ function renderLoggedIn(opts: {
   loadSources?: () => Promise<{ environment: { base_url: string; model: string; has_api_key: boolean }; dotenv: { base_url: string; model: string; has_api_key: boolean } }>;
   probe?: (body: ProbeRequest, signal?: AbortSignal) => Promise<{ reachable: boolean }>;
   logout?: () => Promise<void>;
+  loginFn?: (username: string, password: string) => Promise<AuthUser>;
 } = {}) {
   return render(
     <Workbench
@@ -34,6 +35,7 @@ function renderLoggedIn(opts: {
       probe={opts.probe}
       getCurrentUser={noopUser}
       listConversationsAuth={noopList}
+      loginFn={opts.loginFn}
       logoutFn={opts.logout}
     />,
   );
@@ -78,6 +80,49 @@ describe("工作台", () => {
 
     await user.click(screen.getByRole("button", { name: "返回" }));
     expect(screen.getByRole("heading", { name: "登录" })).toBeTruthy();
+  });
+
+  it("外观可以切换浅色、深色、跟随系统，以及中英文和字号", async () => {
+    const user = userEvent.setup();
+    const previous = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes("dark"),
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+    try {
+      renderLoggedOut();
+      await user.click(await screen.findByRole("button", { name: "未登录" }));
+      await user.click(screen.getByRole("button", { name: "外观" }));
+
+      expect(screen.getByRole("radio", { name: "浅色" }).getAttribute("aria-checked")).toBe("true");
+      await user.click(screen.getByRole("radio", { name: "深色" }));
+      expect(document.documentElement.dataset.theme).toBe("dark");
+
+      await user.click(screen.getByRole("radio", { name: "跟随系统" }));
+      expect(document.documentElement.dataset.themeChoice).toBe("system");
+      expect(document.documentElement.dataset.theme).toBe("dark");
+
+      await user.click(screen.getByRole("radio", { name: "English" }));
+      expect(screen.getByRole("heading", { name: "Appearance" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Appearance" }).getAttribute("aria-current")).toBe("page");
+
+      fireEvent.change(screen.getByRole("slider", { name: "Font size" }), { target: { value: "1.25" } });
+      expect(document.documentElement.dataset.fontScale).toBe("1.25");
+      const stored = JSON.parse(localStorage.getItem("zhijiao.appearance:v1") ?? "{}") as {
+        theme: string;
+        locale: string;
+        fontScale: number;
+      };
+      expect(stored).toMatchObject({ theme: "system", locale: "en", fontScale: 1.25 });
+    } finally {
+      window.matchMedia = previous;
+    }
   });
 
   it("API 配置的本机环境读环境变量，自行填写读 .env", async () => {
@@ -231,14 +276,15 @@ describe("工作台", () => {
     expect(screen.getByRole("button", { name: "登录" })).toBeTruthy();
   });
 
-  it("头像菜单：点击头像显示设置与退出登录两个选项", async () => {
+  it("头像菜单：点击头像显示设置、切换账号与退出登录三个选项", async () => {
     const user = userEvent.setup();
     renderLoggedIn({ logout: async () => {} });
     const accountBtn = await screen.findByRole("button", { name: /王老师/ });
 
-    // 点击头像弹出菜单，包含两个选项
+    // 点击头像弹出菜单，包含三个选项
     await user.click(accountBtn);
     expect(screen.getByRole("menuitem", { name: "设置" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "切换账号" })).toBeTruthy();
     expect(screen.getByRole("menuitem", { name: "退出登录" })).toBeTruthy();
 
     // 设置项 → 进入设置导航
@@ -246,10 +292,141 @@ describe("工作台", () => {
     expect(screen.queryByRole("menu")).toBeNull();
     expect(screen.getByRole("button", { name: "用户设置" })).toBeTruthy();
 
-    // 重新打开菜单 → 退出登录 → 回到登录表单
+    // 重新打开菜单 → 退出登录 → 进入账号切换面板，记住的账号仍在
     await user.click(accountBtn);
     await user.click(screen.getByRole("menuitem", { name: "退出登录" }));
-    await screen.findByRole("button", { name: "登录" });
+    expect(await screen.findByRole("heading", { name: "切换账号" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /王老师/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "添加新账号" })).toBeTruthy();
+  });
+
+  it("头像菜单：切换账号 → 显示本机登录过的账号和添加新账号选项", async () => {
+    const user = userEvent.setup();
+    renderLoggedIn({ logout: async () => {} });
+    const accountBtn = await screen.findByRole("button", { name: /王老师/ });
+
+    await user.click(accountBtn);
+    await user.click(screen.getByRole("menuitem", { name: "切换账号" }));
+
+    // 账号切换面板：当前登录过的账号 + 添加新账号，侧栏变为未登录
+    expect(await screen.findByRole("heading", { name: "切换账号" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /王老师/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "添加新账号" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "未登录" })).toBeTruthy();
+  });
+
+  it("切换账号：选账号输入密码登录，回到工作台", async () => {
+    const user = userEvent.setup();
+    const logins: Array<[string, string]> = [];
+    renderLoggedIn({
+      logout: async () => {},
+      loginFn: async (username, password) => {
+        logins.push([username, password]);
+        return defaultUser;
+      },
+    });
+    const accountBtn = await screen.findByRole("button", { name: /王老师/ });
+
+    await user.click(accountBtn);
+    await user.click(screen.getByRole("menuitem", { name: "切换账号" }));
+    await user.click(await screen.findByRole("button", { name: /王老师/ }));
+
+    await user.type(screen.getByLabelText("密码"), "teacher-pass-123");
+    await user.click(screen.getByRole("button", { name: "登录" }));
+
+    expect(logins).toEqual([["teacher", "teacher-pass-123"]]);
+    // 登录成功回到工作台
+    expect(await screen.findByRole("button", { name: "发送" })).toBeTruthy();
+  });
+
+  it("切换账号：已记住的账号点击后免密进入工作台", async () => {
+    const user = userEvent.setup();
+    const resumes: string[] = [];
+    render(
+      <Workbench
+        api={immediateApi()}
+        getCurrentUser={async () => null}
+        listConversationsAuth={noopList}
+        loginFn={async () => ({ user: defaultUser, remember_token: "token-1" })}
+        logoutFn={async () => {}}
+        resumeFn={async (token) => {
+          resumes.push(token);
+          return { user: defaultUser, remember_token: "token-2" };
+        }}
+      />,
+    );
+
+    await user.type(await screen.findByRole("textbox", { name: "用户名" }), "teacher");
+    await user.type(screen.getByLabelText("密码"), "teacher-pass-123");
+    await user.click(screen.getByRole("button", { name: "登录" }));
+
+    const accountBtn = await screen.findByRole("button", { name: /王老师/ });
+    await user.click(accountBtn);
+    await user.click(screen.getByRole("menuitem", { name: "切换账号" }));
+    await user.click(await screen.findByRole("button", { name: /王老师/ }));
+
+    expect(await screen.findByRole("button", { name: "发送" })).toBeTruthy();
+    expect(screen.queryByLabelText("密码")).toBeNull();
+    expect(resumes).toEqual(["token-1"]);
+    const stored = JSON.parse(localStorage.getItem("zhijiao.remembered-accounts") ?? "[]") as Array<{
+      token: string;
+    }>;
+    expect(stored[0]?.token).toBe("token-2");
+  });
+
+  it("切换账号：免密令牌失效时改为输入密码", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(
+      "zhijiao.remembered-accounts",
+      JSON.stringify([{ username: "teacher", display_name: "王老师", token: "stale-token" }]),
+    );
+    const logins: Array<[string, string]> = [];
+    render(
+      <Workbench
+        api={immediateApi()}
+        getCurrentUser={async () => defaultUser}
+        listConversationsAuth={noopList}
+        logoutFn={async () => {}}
+        loginFn={async (username, password) => {
+          logins.push([username, password]);
+          return { user: defaultUser, remember_token: "fresh-token" };
+        }}
+        resumeFn={async () => {
+          throw new ApiRequestError("unauthenticated", "请先登录。", false, 401);
+        }}
+      />,
+    );
+
+    const accountBtn = await screen.findByRole("button", { name: /王老师/ });
+    await user.click(accountBtn);
+    await user.click(screen.getByRole("menuitem", { name: "切换账号" }));
+    await user.click(await screen.findByRole("button", { name: /王老师/ }));
+
+    expect(await screen.findByText("这个账号需要重新输入密码。")).toBeTruthy();
+    await user.type(screen.getByLabelText("密码"), "teacher-pass-123");
+    await user.click(screen.getByRole("button", { name: "登录" }));
+
+    expect(logins).toEqual([["teacher", "teacher-pass-123"]]);
+    expect(await screen.findByRole("button", { name: "发送" })).toBeTruthy();
+    const stored = JSON.parse(localStorage.getItem("zhijiao.remembered-accounts") ?? "[]") as Array<{
+      token: string;
+    }>;
+    expect(stored[0]?.token).toBe("fresh-token");
+  });
+
+  it("切换账号：添加新账号 → 完整的登录/注册表单", async () => {
+    const user = userEvent.setup();
+    renderLoggedIn({ logout: async () => {} });
+    const accountBtn = await screen.findByRole("button", { name: /王老师/ });
+
+    await user.click(accountBtn);
+    await user.click(screen.getByRole("menuitem", { name: "切换账号" }));
+    await user.click(await screen.findByRole("button", { name: "添加新账号" }));
+
+    // 回到常规登录表单：有用户名输入和去注册入口
+    expect(await screen.findByRole("heading", { name: "登录" })).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "用户名" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "去注册" })).toBeTruthy();
   });
 });
 

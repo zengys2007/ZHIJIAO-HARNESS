@@ -1,3 +1,4 @@
+import { useAppearance } from "../lib/appearance";
 import type { ConversationMessage } from "../types/api";
 import { ToolCallCard } from "./ToolCallCard";
 
@@ -16,34 +17,35 @@ type Props = {
 };
 
 export function Transcript({ messages, loading, onApprove, onReject }: Props) {
+  const { t } = useAppearance();
   const turns = groupTurns(messages);
   if (loading) {
     return (
-      <section className="transcript" aria-label="对话">
+      <section className="transcript" aria-label={t("conversation")}>
         <p className="loading" role="status">
-          正在读取这段对话。
+          {t("reading")}
         </p>
       </section>
     );
   }
   if (turns.length === 0) {
     return (
-      <section className="transcript" aria-label="对话">
+      <section className="transcript" aria-label={t("conversation")}>
         <div className="empty">
           <h1>智教harness</h1>
-          <p>用一句话说说这节课。回复会出现在这里。</p>
+          <p>{t("emptyHint")}</p>
         </div>
       </section>
     );
   }
 
   return (
-    <section className="transcript" aria-label="对话">
+    <section className="transcript" aria-label={t("conversation")}>
       <div className="column">
         {turns.map((turn) => (
           <article key={turn.taskId} className="turn">
             <div className="bubble user">
-              <p className="who">我</p>
+              <p className="who">{t("me")}</p>
               <p className="content">{turn.user.content}</p>
             </div>
             {turn.assistant ? (
@@ -56,7 +58,7 @@ export function Transcript({ messages, loading, onApprove, onReject }: Props) {
             ) : null}
             {turn.user.status === "pending" || turn.user.status === "running" ? (
               <p className="turn-status" role="status">
-                正在回复
+                {t("replying")}
               </p>
             ) : null}
             {turn.user.status === "failed" && turn.user.error ? (
@@ -82,6 +84,7 @@ function AssistantBlock({
   onApprove?: (taskId: string, callId: string) => void;
   onReject?: (taskId: string, callId: string) => void;
 }) {
+  const { t } = useAppearance();
   const hasCalls = (assistant.tool_calls?.length ?? 0) > 0;
   const resultsById = new Map((assistant.tool_results ?? []).map((r) => [r.call_id, r]));
 
@@ -92,7 +95,7 @@ function AssistantBlock({
         {assistant.content ? <p className="content">{assistant.content}</p> : null}
       </div>
       {hasCalls ? (
-        <div className="tool-list" aria-label="工具调用列表">
+        <div className="tool-list" aria-label={t("toolCalls")}>
           {assistant.tool_calls!.map((call) => (
             <ToolCallCard
               key={call.call_id}

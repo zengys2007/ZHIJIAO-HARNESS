@@ -288,9 +288,12 @@
 {
   "user_id": "0123456789abcdef0123456789abcdef",
   "username": "teacher",
-  "display_name": "王老师"
+  "display_name": "王老师",
+  "remember_token": "设备令牌，只在这一次响应里出现"
 }
 ```
+
+`remember_token` 是记住此设备的令牌。前端只放在本机账号记录里，不写入日志。没有这个字段时，切换该账号仍要输入密码。
 
 ### 9.2 登录
 
@@ -302,13 +305,23 @@
 
 成功时 200，正文与注册相同，并设置 Cookie。字段缺失或类型不对时，用第 9 节对应字段的句子。
 
+### 9.2.1 免密恢复
+
+`POST /api/auth/resume`
+
+```json
+{ "remember_token": "上一次登录或恢复返回的令牌" }
+```
+
+令牌有效时 200，正文与登录相同，并设置新的 Cookie。旧令牌立即作废，响应里的 `remember_token` 是下一枚。令牌缺失、过期或不存在时 401，`error.code` 为 `unauthenticated`。空令牌或超长令牌是 400，`error.message` 为「令牌写成 1 到 128 个字。」
+
 ### 9.3 退出
 
 `POST /api/auth/logout`。没有正文。已登录时 204，没有正文。未登录时 401，并清除 Cookie。
 
 ### 9.4 当前用户
 
-`GET /api/auth/me`。已登录时 200，正文与注册相同。
+`GET /api/auth/me`。已登录时 200，正文只有 `user_id`、`username`、`display_name`，不含 `remember_token`。
 
 ### 9.5 会话列表
 

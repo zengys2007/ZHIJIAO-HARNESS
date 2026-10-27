@@ -7,6 +7,7 @@ PASSWORD_MESSAGE = "密码写成 8 到 128 个字。"
 DISPLAY_NAME_MESSAGE = "显示名写成 1 到 32 个字。"
 UNKNOWN_FIELD_MESSAGE = "请求里有不能识别的字段。"
 CREDENTIALS_MESSAGE = "用户名或密码不正确。"
+REMEMBER_TOKEN_MESSAGE = "令牌写成 1 到 128 个字。"
 RESERVED_USERNAME = "local-admin"
 
 
@@ -28,6 +29,14 @@ def parse_login(body: object) -> tuple[str, str]:
     if "password" not in record or not isinstance(record["password"], str):
         raise RequestError("password", public_message=PASSWORD_MESSAGE)
     return record["username"].strip(), record["password"]
+
+
+def parse_resume(body: object) -> str:
+    record = _object(body, {"remember_token"})
+    value = record.get("remember_token", None)
+    if not isinstance(value, str) or not 1 <= len(value) <= 128:
+        raise RequestError("remember_token", public_message=REMEMBER_TOKEN_MESSAGE)
+    return value
 
 
 def _object(body: object, allowed: set[str]) -> dict:

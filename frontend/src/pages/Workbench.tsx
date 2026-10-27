@@ -9,18 +9,22 @@ import {
   logout as httpLogout,
   probeLlm,
   register as httpRegister,
+  resume as httpResume,
   loadLlmSources,
   type LlmSources,
   type ProbeRequest,
 } from "../api/http";
 import { previewApi } from "../api/preview";
+import { loadRememberedAccounts, rememberAccount, type RememberedAccount } from "../lib/accounts";
+import { AppearanceProvider, useAppearance } from "../lib/appearance";
 import type { SessionSummary } from "../lib/sessions";
-import { CONTENT_LIMIT, INVALID_CONTENT_MESSAGE, codePointLength, conversationTitle } from "../lib/text";
-import type { ApprovalMode, AuthUser, ConversationApi, ConversationMessage, TaskSnapshot } from "../types/api";
+import { CONTENT_LIMIT, codePointLength, conversationTitle } from "../lib/text";
+import type { ApprovalMode, AuthResult, AuthUser, ConversationApi, ConversationMessage, TaskSnapshot } from "../types/api";
+import { AccountSwitcher } from "../components/AccountSwitcher";
 import { ApprovalBar } from "../components/ApprovalBar";
 import { AuthForm } from "../components/AuthForm";
 import { Composer } from "../components/Composer";
-import { PlusMenu, UNAVAILABLE_TOAST } from "../components/PlusMenu";
+import { PlusMenu } from "../components/PlusMenu";
 import { Settings, type SettingsSection } from "../components/Settings";
 import { Sidebar } from "../components/Sidebar";
 import { Transcript } from "../components/Transcript";
@@ -35,13 +39,20 @@ type Props = {
   getCurrentUser?: () => Promise<AuthUser | null>;
   /** 测试注入：列出当前用户的会话。默认走后端 */
   listConversationsAuth?: () => Promise<import("../types/api").ConversationSummary[]>;
-  /** 测试注入：登录 */
-  loginFn?: (username: string, password: string) => Promise<AuthUser>;
+  /** 测试注入：登录。返回用户，或附带记住此设备的令牌 */
+  loginFn?: (username: string, password: string) => Promise<AuthUser | AuthResult>;
   /** 测试注入：注册 */
-  registerFn?: (u: string, p: string, d?: string) => Promise<AuthUser>;
+  registerFn?: (u: string, p: string, d?: string) => Promise<AuthUser | AuthResult>;
+  /** 测试注入：用记住的令牌免密恢复 */
+  resumeFn?: (rememberToken: string) => Promise<AuthUser | AuthResult>;
   /** 测试注入：退出 */
   logoutFn?: () => Promise<void>;
 };
+
+function readSession(value: AuthUser | AuthResult): AuthResult {
+  if ("user" in value) return value;
+  return { user: value, remember_token: null };
+}
 
 /** 判断错误是否为 unauthenticated（401 / code=unauthenticated） */
 function isUnauthenticated(err: unknown): boolean {
@@ -51,7 +62,15 @@ function isUnauthenticated(err: unknown): boolean {
   );
 }
 
-export function Workbench({
+export function Workbench(props: Props) {
+  return (
+    <AppearanceProvider>
+      <WorkbenchScreen {...props} />
+    </AppearanceProvider>
+  );
+}
+
+function WorkbenchScreen({
   api,
   probe = probeLlm,
   loadSources = loadLlmSources,
@@ -59,8 +78,10 @@ export function Workbench({
   listConversationsAuth: listConversationsImpl = httpListConversations,
   loginFn = httpLogin,
   registerFn = httpRegister,
+  resumeFn = httpResume,
   logoutFn = httpLogout,
 }: Props) {
+  const { t } = useAppearance();
   // ===== Auth 状态 =====
   // undefined = 正在确认（首次加载）
   // null = 未登录
@@ -68,6 +89,10 @@ export function Workbench({
   const [user, setUser] = useState<AuthUser | null | undefined>(undefined);
   const [logoutBusy, setLogoutBusy] = useState(false);
   const authAliveRef = useRef(true);
+  /** 未登录时的界面：auth = 常规登录/注册表单，switch = 账号切换面板 */
+  const [authScreen, setAuthScreen] = useState<"auth" | "switch">("auth");
+  /** 本机登录过的账号（localStorage：用户名、显示名、免密令牌，不存密码） */
+  const [remembered, setRemembered] = useState<RememberedAccount[]>([]);
 
   // ===== 原有对话状态 =====
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
@@ -110,12 +135,16 @@ export function Workbench({
       const current = await getCurrentUserImpl();
       if (!authAliveRef.current) return;
       setUser(current);
-      if (current) await refreshSessionList();
+      if (current) {
+        rememberAccount({ username: current.username, display_name: current.display_name });
+        setRemembered(loadRememberedAccounts());
+        await refreshSessionList();
+      }
     } catch (error) {
       if (!authAliveRef.current) return;
       // 网络/5xx：留在 undefined（确认中），不视为未登录
       if (error instanceof ApiRequestError && error.status >= 500) {
-        setBanner("系统出错了，可以再发一次。");
+        setBanner(t("systemError"));
         // 仍然将 user 置为 null 让界面有重试入口
         setUser(null);
       } else {
@@ -156,18 +185,48 @@ export function Workbench({
     setView("chat");
   }, []);
 
+  function adoptSession(session: AuthResult) {
+    setUser(session.user);
+    rememberAccount({
+      username: session.user.username,
+      display_name: session.user.display_name,
+      token: session.remember_token ?? "",
+    });
+    setRemembered(loadRememberedAccounts());
+    setAuthScreen("auth");
+  }
+
   async function doLogin(username: string, password: string) {
-    const u = await loginFn(username, password);
+    const session = readSession(await loginFn(username, password));
     if (!authAliveRef.current) return;
-    setUser(u);
+    adoptSession(session);
     await refreshSessionList();
   }
 
   async function doRegister(username: string, password: string, displayName?: string) {
-    const u = await registerFn(username, password, displayName);
+    const session = readSession(await registerFn(username, password, displayName));
     if (!authAliveRef.current) return;
-    setUser(u);
+    adoptSession(session);
     await refreshSessionList();
+  }
+
+  async function doResume(account: RememberedAccount) {
+    try {
+      const session = readSession(await resumeFn(account.token));
+      if (!authAliveRef.current) return;
+      adoptSession(session);
+      await refreshSessionList();
+    } catch (error) {
+      if (isUnauthenticated(error)) {
+        rememberAccount({
+          username: account.username,
+          display_name: account.display_name,
+          token: "",
+        });
+        setRemembered(loadRememberedAccounts());
+      }
+      throw error;
+    }
   }
 
   async function doLogout() {
@@ -179,6 +238,12 @@ export function Workbench({
       setLogoutBusy(false);
       handleUnauthenticated();
     }
+  }
+
+  /** 切换账号：结束当前会话，进入账号切换面板（列出本机登录过的账号和添加新账号） */
+  async function doSwitchAccount() {
+    setAuthScreen("switch");
+    await doLogout();
   }
 
   // ===== 原有对话逻辑 =====
@@ -250,13 +315,13 @@ export function Workbench({
 
   async function handleSubmit() {
     if (!authenticated) {
-      setBanner("请先登录。");
+      setBanner(t("signInFirst"));
       return;
     }
     if (busyRef.current) return;
     const content = draft.trim();
     if (codePointLength(content) < 1 || codePointLength(content) > CONTENT_LIMIT) {
-      setBanner(INVALID_CONTENT_MESSAGE);
+      setBanner(t("contentLimit"));
       return;
     }
 
@@ -320,13 +385,13 @@ export function Workbench({
         } catch (previewError) {
           showMessages(viewId, base);
           setDraft(content);
-          setBanner(previewError instanceof Error ? previewError.message : "系统出错了，可以再发一次。");
+          setBanner(previewError instanceof Error ? previewError.message : t("systemError"));
           return;
         }
       }
       showMessages(viewId, base);
       setDraft(content);
-      setBanner(error instanceof Error ? error.message : "系统出错了，可以再发一次。");
+      setBanner(error instanceof Error ? error.message : t("systemError"));
     } finally {
       busyRef.current = false;
       if (aliveRef.current) setSubmitting(false);
@@ -401,7 +466,7 @@ export function Workbench({
           handleUnauthenticated();
           return;
         }
-        setBanner(error instanceof Error ? error.message : "系统出错了，可以再发一次。");
+        setBanner(error instanceof Error ? error.message : t("systemError"));
         setCache((current) => ({ ...current, [id]: current[id] ?? [] }));
       });
   }
@@ -431,7 +496,12 @@ export function Workbench({
         onSelect={handleSelect}
         onOpenSettings={() => setView("settings")}
         onCloseSettings={() => setView("chat")}
+        onSwitchAccount={() => {
+          void doSwitchAccount();
+        }}
         onLogout={() => {
+          // 退出后仍列出本机记住的账号，方便快速重新登录；没有记住的账号时回常规登录表单
+          setAuthScreen(remembered.length > 0 ? "switch" : "auth");
           void doLogout();
         }}
         user={user}
@@ -452,7 +522,16 @@ export function Workbench({
         ) : user === undefined ? (
           <AuthLoading />
         ) : user === null ? (
-          <AuthForm onLogin={doLogin} onRegister={doRegister} />
+          authScreen === "switch" ? (
+            <AccountSwitcher
+              accounts={remembered}
+              onLogin={doLogin}
+              onResume={doResume}
+              onAddAccount={() => setAuthScreen("auth")}
+            />
+          ) : (
+            <AuthForm onLogin={doLogin} onRegister={doRegister} />
+          )
         ) : (
           <>
             <Transcript
@@ -479,7 +558,7 @@ export function Workbench({
                 <PlusMenu
                   approvalMode={approvalMode}
                   onApprovalModeChange={setApprovalMode}
-                  onUnavailable={() => showToast(UNAVAILABLE_TOAST)}
+                  onUnavailable={() => showToast(t("unavailable"))}
                 />
               }
               approvalSegment={
@@ -503,9 +582,10 @@ export function Workbench({
 }
 
 function AuthLoading() {
+  const { t } = useAppearance();
   return (
     <div className="auth-wrap auth-loading" role="status" aria-live="polite">
-      <p className="auth-pending">正在确认登录…</p>
+      <p className="auth-pending">{t("confirmingLogin")}</p>
     </div>
   );
 }

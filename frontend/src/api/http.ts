@@ -1,5 +1,6 @@
 import type {
   ApiErrorBody,
+  AuthResult,
   AuthUser,
   ConversationApi,
   ConversationMessage,
@@ -154,26 +155,35 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
   }
 }
 
-export async function login(username: string, password: string): Promise<AuthUser> {
+export async function login(username: string, password: string): Promise<AuthResult> {
   const body = await request("/api/auth/login", {
     method: "POST",
     body: JSON.stringify({ username, password }),
   });
-  return readAuthUser(body);
+  return readAuthResult(body);
 }
 
 export async function register(
   username: string,
   password: string,
   displayName?: string,
-): Promise<AuthUser> {
+): Promise<AuthResult> {
   const payload: Record<string, string> = { username, password };
   if (displayName && displayName.trim()) payload.display_name = displayName.trim();
   const body = await request("/api/auth/register", {
     method: "POST",
     body: JSON.stringify(payload),
   });
-  return readAuthUser(body);
+  return readAuthResult(body);
+}
+
+/** 用记住此设备的令牌换新会话。成功后旧令牌作废，响应里是新令牌。 */
+export async function resume(rememberToken: string): Promise<AuthResult> {
+  const body = await request("/api/auth/resume", {
+    method: "POST",
+    body: JSON.stringify({ remember_token: rememberToken }),
+  });
+  return readAuthResult(body);
 }
 
 export async function logout(): Promise<void> {
@@ -200,6 +210,15 @@ export async function listConversations(): Promise<ConversationSummary[]> {
       };
     })
     .filter((c) => c.conversation_id.length > 0);
+}
+
+function readAuthResult(body: unknown): AuthResult {
+  const user = readAuthUser(body);
+  const token = recordOf(body).remember_token;
+  return {
+    user,
+    remember_token: typeof token === "string" && token.length > 0 ? token : null,
+  };
 }
 
 function readAuthUser(body: unknown): AuthUser {

@@ -1,3 +1,5 @@
+import { useAppearance } from "../lib/appearance";
+
 type ComposerProps = {
   value: string;
   busy: boolean;
@@ -11,6 +13,7 @@ type ComposerProps = {
 };
 
 export function Composer({ value, busy, alert, onChange, onSubmit, leadingSlot, approvalSegment }: ComposerProps) {
+  const { t } = useAppearance();
   const canSend = !busy && value.trim().length > 0;
 
   return (
@@ -23,13 +26,13 @@ export function Composer({ value, busy, alert, onChange, onSubmit, leadingSlot, 
         }}
       >
         <label className="sr-only" htmlFor="draft">
-          消息
+          {t("message")}
         </label>
         <textarea
           id="draft"
           name="content"
           rows={2}
-          placeholder="写下这节课想解决的问题"
+          placeholder={t("draftPlaceholder")}
           value={value}
           disabled={busy}
           onChange={(event) => onChange(event.target.value)}
@@ -41,7 +44,7 @@ export function Composer({ value, busy, alert, onChange, onSubmit, leadingSlot, 
           }}
         />
         <button className="send" type="submit" disabled={!canSend}>
-          {busy ? "正在回复" : "发送"}
+          {busy ? t("replying") : t("send")}
         </button>
       </form>
       {alert ? (
@@ -54,7 +57,7 @@ export function Composer({ value, busy, alert, onChange, onSubmit, leadingSlot, 
             {leadingSlot}
             {approvalSegment}
           </div>
-          <p className="hint">Enter 发送，Shift+Enter 换行</p>
+          <p className="hint">{t("enterHint")}</p>
         </div>
       )}
     </div>

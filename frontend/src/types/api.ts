@@ -63,6 +63,12 @@ export type AuthUser = {
   display_name: string;
 };
 
+/** login / register / resume 的返回：用户资料 + 记住此设备的令牌（后端未附带时为 null） */
+export type AuthResult = {
+  user: AuthUser;
+  remember_token: string | null;
+};
+
 /** /api/conversations 返回的会话摘要 */
 export type ConversationSummary = {
   conversation_id: string;

@@ -16,12 +16,14 @@ from app.api.auth import (
     RESERVED_USERNAME,
     parse_login,
     parse_register,
+    parse_resume,
 )
 from app.api.errors import error_payload
 from app.api.messages import RequestError, parse_create_conversation, parse_message
 from app.api.probe import parse_probe
 from app.api.views import conversation_payload, task_payload
 from app.auth.passwords import burn_password_check, hash_password, verify_password
+from app.auth.remember import hash_remember_token, issue_remember_token, remember_expiry, remember_now
 from app.auth.sessions import (
     COOKIE_MAX_AGE,
     COOKIE_NAME,
@@ -84,10 +86,13 @@ def create_app(settings: Settings | None = None, complete=None, probe=None, env_
             return None, JSONResponse(error_payload("unauthenticated"), status_code=401)
         return user, None
 
-    def issue_session(user: User) -> JSONResponse:
+    def issue_session(user: User, extra: dict | None = None) -> JSONResponse:
         expires_at, expires_unix = session_expiry()
         session = repository.create_session(user.id, expires_at)
-        response = JSONResponse(_public_user(user), status_code=200)
+        body = _public_user(user)
+        if extra:
+            body.update(extra)
+        response = JSONResponse(body, status_code=200)
         response.set_cookie(
             key=COOKIE_NAME,
             value=sign_cookie(session.id, expires_unix, auth_secret),
@@ -98,6 +103,12 @@ def create_app(settings: Settings | None = None, complete=None, probe=None, env_
             secure=False,
         )
         return response
+
+    def issue_remembered_session(user: User) -> JSONResponse:
+        """签发会话 Cookie，并附带一枚新的记住此设备令牌。"""
+        raw, digest = issue_remember_token()
+        repository.create_remember_token(digest, user.id, remember_expiry())
+        return issue_session(user, {"remember_token": raw})
 
     @app.post("/api/auth/register")
     async def register(request: Request):
@@ -114,7 +125,7 @@ def create_app(settings: Settings | None = None, complete=None, probe=None, env_
             user = repository.create_user(username, display_name, hash_password(password))
         except ConflictError:
             return JSONResponse(error_payload("conflict", "这个用户名已经有人使用。"), status_code=409)
-        response = issue_session(user)
+        response = issue_remembered_session(user)
         response.status_code = 201
         return response
 
@@ -133,7 +144,27 @@ def create_app(settings: Settings | None = None, complete=None, probe=None, env_
             return JSONResponse(error_payload("invalid_input", CREDENTIALS_MESSAGE), status_code=400)
         if not verify_password(password, user.password_hash):
             return JSONResponse(error_payload("invalid_input", CREDENTIALS_MESSAGE), status_code=400)
-        return issue_session(user)
+        return issue_remembered_session(user)
+
+    @app.post("/api/auth/resume")
+    async def resume(request: Request):
+        """免密恢复：用记住此设备的令牌换新会话。令牌轮换，旧令牌立即作废。"""
+        try:
+            body = json.loads(await request.body() or b"null")
+            token = parse_resume(body)
+        except json.JSONDecodeError:
+            return JSONResponse(error_payload("invalid_input"), status_code=400)
+        except RequestError as exc:
+            return JSONResponse(error_payload("invalid_input", exc.public_message), status_code=400)
+        digest = hash_remember_token(token)
+        user_id = repository.user_id_for_remember_token(digest, remember_now())
+        user = repository.get_user(user_id) if user_id else None
+        if user is None:
+            if user_id:
+                repository.delete_remember_token(digest)
+            return JSONResponse(error_payload("unauthenticated"), status_code=401)
+        repository.delete_remember_token(digest)
+        return issue_remembered_session(user)
 
     @app.post("/api/auth/logout")
     def logout(request: Request):

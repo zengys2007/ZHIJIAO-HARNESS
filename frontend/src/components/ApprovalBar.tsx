@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useAppearance } from "../lib/appearance";
 import type { ApprovalMode } from "../types/api";
 
 type Props = {
@@ -14,25 +15,15 @@ type Option = {
   icon: string;
 };
 
-const OPTIONS: Option[] = [
-  {
-    value: "manual",
-    label: "手动审批",
-    hint: "每次工具调用都要确认",
-    icon: "✋",
-  },
-  {
-    value: "auto",
-    label: "自动执行",
-    hint: "直接执行所有工具调用",
-    icon: "⚡",
-  },
-];
-
 export function ApprovalBar({ mode, onChange, pendingCount = 0 }: Props) {
+  const { t } = useAppearance();
+  const options: Option[] = [
+    { value: "manual", label: t("manual"), hint: t("manualHint"), icon: "✋" },
+    { value: "auto", label: t("automatic"), hint: t("automaticHint"), icon: "⚡" },
+  ];
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const current = OPTIONS.find((o) => o.value === mode) ?? OPTIONS[0];
+  const current = options.find((o) => o.value === mode) ?? options[0];
 
   // 点击外部 / Esc 关闭
   useEffect(() => {
@@ -63,7 +54,7 @@ export function ApprovalBar({ mode, onChange, pendingCount = 0 }: Props) {
         className={`approval-trigger ${open ? "is-open" : ""}`}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label="审批模式"
+        aria-label={t("approvalMode")}
         onClick={() => setOpen((o) => !o)}
       >
         <span className="approval-trigger-icon" aria-hidden>
@@ -81,8 +72,8 @@ export function ApprovalBar({ mode, onChange, pendingCount = 0 }: Props) {
       </button>
 
       {open ? (
-        <div className="approval-popover" role="menu" aria-label="选择审批模式">
-          {OPTIONS.map((opt) => {
+        <div className="approval-popover" role="menu" aria-label={t("chooseApproval")}>
+          {options.map((opt) => {
             const selected = opt.value === mode;
             return (
               <label key={opt.value} className={`approval-option ${selected ? "is-selected" : ""}`}>

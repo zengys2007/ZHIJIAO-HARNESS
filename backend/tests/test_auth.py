@@ -3,6 +3,7 @@ import sqlite3
 from fastapi.testclient import TestClient
 
 from app.auth.passwords import hash_password, verify_password
+from app.auth.remember import issue_remember_token, remember_now
 from app.auth.sessions import resolve_user, sign_cookie
 from app.config import Settings
 from app.llm.protocol import AssistantMessage
@@ -204,6 +205,52 @@ def test_short_auth_secret_refuses_to_start_without_echoing_it(tmp_path):
         raise AssertionError("expected startup failure")
     except RuntimeError as exc:
         assert "too-short" not in str(exc)
+
+
+def test_login_and_register_issue_remember_tokens_for_passwordless_resume(tmp_path):
+    client = _client(tmp_path)
+    registered = client.post("/api/auth/register", json={"username": "teacher", "password": PASSWORD})
+    raw_token = registered.json()["remember_token"]
+    assert isinstance(raw_token, str) and len(raw_token) >= 20
+
+    # 无 Cookie 的新浏览器：令牌免密换会话，返回轮换后的新令牌
+    another = TestClient(client.app)
+    resumed = another.post("/api/auth/resume", json={"remember_token": raw_token})
+    assert resumed.status_code == 200
+    assert resumed.json()["username"] == "teacher"
+    next_token = resumed.json()["remember_token"]
+    assert next_token and next_token != raw_token
+    assert another.get("/api/auth/me").status_code == 200
+
+    # 旧令牌已轮换作废；新令牌可再次使用
+    assert TestClient(client.app).post("/api/auth/resume", json={"remember_token": raw_token}).status_code == 401
+    assert TestClient(client.app).post("/api/auth/resume", json={"remember_token": next_token}).status_code == 200
+
+    # 登录同样附带令牌；不认识的令牌 401，不合法的正文 400
+    logged = client.post("/api/auth/login", json={"username": "teacher", "password": PASSWORD})
+    assert len(logged.json()["remember_token"]) >= 20
+    unknown = TestClient(client.app).post("/api/auth/resume", json={"remember_token": "x" * 64})
+    assert unknown.status_code == 401
+    assert unknown.json()["error"]["code"] == "unauthenticated"
+    malformed = TestClient(client.app).post("/api/auth/resume", json={"remember_token": ""})
+    assert malformed.status_code == 400
+    assert malformed.json()["error"]["message"] == "令牌写成 1 到 128 个字。"
+    extra = TestClient(client.app).post("/api/auth/resume", json={"remember_token": "abc", "extra": 1})
+    assert extra.status_code == 400
+
+
+def test_expired_remember_token_is_rejected_and_removed(tmp_path):
+    repo = SqliteRepository(tmp_path / "app.sqlite")
+    user = repo.create_user("teacher", "老师", hash_password(PASSWORD))
+    raw, digest = issue_remember_token()
+    repo.create_remember_token(digest, user.id, "2020-01-01T00:00:00Z")
+
+    client = _client(tmp_path)
+    response = client.post("/api/auth/resume", json={"remember_token": raw})
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "unauthenticated"
+    assert repo.user_id_for_remember_token(digest, remember_now()) is None
 
 
 def _client(tmp_path):

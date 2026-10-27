@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useAppearance } from "../lib/appearance";
 import type { ApprovalMode } from "../types/api";
 
 type Props = {
@@ -22,6 +23,7 @@ type Item = {
 export const UNAVAILABLE_TOAST = "该功能尚未开放";
 
 export function PlusMenu({ approvalMode, onApprovalModeChange, onUnavailable }: Props) {
+  const { locale, t } = useAppearance();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -42,25 +44,25 @@ export function PlusMenu({ approvalMode, onApprovalModeChange, onUnavailable }: 
     };
   }, [open]);
 
-  const permissionDesc = `当前：${approvalMode === "manual" ? "手动审批" : "自动执行"}`;
+  const permissionDesc = `${t("currentPrefix")}${approvalMode === "manual" ? t("manual") : t("automatic")}`;
 
   const sections: { title: string; items: Item[] }[] = [
     {
-      title: "添加",
+      title: t("add"),
       items: [
-        { key: "file", label: "文件", en: "file", icon: <FileIcon />, kind: "plain" },
-        { key: "goal", label: "目标", en: "goal", desc: "设置或查看长期任务目标", icon: <GoalIcon />, kind: "plain" },
-        { key: "plan", label: "计划", en: "plan", desc: "进入或退出计划模式", icon: <PlanIcon />, kind: "plain" },
-        { key: "feedback", label: "反馈", en: "feedback", desc: "发送关于当前会话的反馈", icon: <FeedbackIcon />, kind: "plain" },
+        { key: "file", label: t("file"), en: "file", icon: <FileIcon />, kind: "plain" },
+        { key: "goal", label: t("goal"), en: "goal", desc: t("goalDesc"), icon: <GoalIcon />, kind: "plain" },
+        { key: "plan", label: t("plan"), en: "plan", desc: t("planDesc"), icon: <PlanIcon />, kind: "plain" },
+        { key: "feedback", label: t("feedback"), en: "feedback", desc: t("feedbackDesc"), icon: <FeedbackIcon />, kind: "plain" },
       ],
     },
     {
-      title: "指令",
+      title: t("commands"),
       items: [
-        { key: "compact", label: "压缩", en: "compact", desc: "压缩以上对话内容", icon: <CompactIcon />, kind: "plain" },
-        { key: "permission", label: "权限", en: "permission", desc: permissionDesc, icon: <ShieldIcon />, kind: "permission" },
-        { key: "model", label: "模型", en: "model", desc: "选择本会话使用的模型", icon: <ChipIcon />, kind: "plain" },
-        { key: "export", label: "下载日志", en: "export", desc: "将当前会话内容导出为 ZIP", icon: <DownloadIcon />, kind: "plain" },
+        { key: "compact", label: t("compact"), en: "compact", desc: t("compactDesc"), icon: <CompactIcon />, kind: "plain" },
+        { key: "permission", label: t("permission"), en: "permission", desc: permissionDesc, icon: <ShieldIcon />, kind: "permission" },
+        { key: "model", label: t("model"), en: "model", desc: t("modelDesc"), icon: <ChipIcon />, kind: "plain" },
+        { key: "export", label: t("exportLogs"), en: "export", desc: t("exportDesc"), icon: <DownloadIcon />, kind: "plain" },
       ],
     },
   ];
@@ -82,14 +84,14 @@ export function PlusMenu({ approvalMode, onApprovalModeChange, onUnavailable }: 
         className={`plus-trigger ${open ? "is-open" : ""}`}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label="更多操作"
+        aria-label={t("more")}
         onClick={() => setOpen((o) => !o)}
       >
         <span aria-hidden>＋</span>
       </button>
 
       {open ? (
-        <div className="plus-popover" role="menu" aria-label="更多操作">
+        <div className="plus-popover" role="menu" aria-label={t("more")}>
           {sections.map((section) => (
             <div key={section.title} className="plus-section">
               <p className="plus-section-label">{section.title}</p>
@@ -106,7 +108,7 @@ export function PlusMenu({ approvalMode, onApprovalModeChange, onUnavailable }: 
                   </span>
                   <span className="plus-item-main">
                     <span className="plus-item-label">{item.label}</span>
-                    <span className="plus-item-en">{item.en}</span>
+                    {locale === "zh" ? <span className="plus-item-en">{item.en}</span> : null}
                   </span>
                   {item.desc ? (
                     <span className={`plus-item-desc ${item.kind === "permission" ? "is-active" : ""}`}>

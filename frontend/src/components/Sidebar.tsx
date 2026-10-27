@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useAppearance } from "../lib/appearance";
 import type { SettingsSection } from "./Settings";
 import type { SessionSummary } from "../lib/sessions";
 import type { AuthUser } from "../types/api";
@@ -15,6 +16,8 @@ type SidebarProps = {
   onSelect: (id: string) => void;
   onOpenSettings: () => void;
   onCloseSettings: () => void;
+  /** 头像菜单里的切换账号 */
+  onSwitchAccount: () => void;
   /** 头像菜单里的退出登录 */
   onLogout: () => void;
   /** 已登录用户，或 null（未登录），或 undefined（正在确认） */
@@ -33,12 +36,14 @@ export function Sidebar({
   onSelect,
   onOpenSettings,
   onCloseSettings,
+  onSwitchAccount,
   onLogout,
   user,
 }: SidebarProps) {
+  const { t } = useAppearance();
   const loggedIn = user !== null && user !== undefined;
   const accountLabel =
-    user === undefined ? "正在确认登录…" : user ? user.display_name : "未登录";
+    user === undefined ? t("confirmingLogin") : user ? user.display_name : t("signedOut");
   const [menuOpen, setMenuOpen] = useState(false);
   const accountRef = useRef<HTMLDivElement | null>(null);
 
@@ -100,7 +105,7 @@ export function Sidebar({
           ) : null}
         </button>
         {loggedIn && menuOpen ? (
-          <div className="account-menu" role="menu" aria-label="账号操作">
+          <div className="account-menu" role="menu" aria-label={t("accountMenu")}>
             <button
               type="button"
               role="menuitem"
@@ -111,7 +116,19 @@ export function Sidebar({
               }}
             >
               <GearIcon />
-              设置
+              {t("settings")}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="account-menu-item"
+              onClick={() => {
+                setMenuOpen(false);
+                onSwitchAccount();
+              }}
+            >
+              <SwitchIcon />
+              {t("switchAccount")}
             </button>
             <button
               type="button"
@@ -123,7 +140,7 @@ export function Sidebar({
               }}
             >
               <LogoutIcon />
-              退出登录
+              {t("logOut")}
             </button>
           </div>
         ) : null}
@@ -149,6 +166,7 @@ function ChatNav({
   onNew: () => void;
   onSelect: (id: string) => void;
 }) {
+  const { t } = useAppearance();
   return (
     <>
       <div className="brand-row">
@@ -158,16 +176,16 @@ function ChatNav({
         <p className="brand">智教harness</p>
       </div>
       <button className="new-chat" type="button" onClick={onNew} disabled={busy || !loggedIn}>
-        新对话
+        {t("newChat")}
       </button>
       {!loggedIn && !preview ? (
-        <p className="preview-note">请先登录。</p>
+        <p className="preview-note">{t("signInFirst")}</p>
       ) : preview ? (
-        <p className="preview-note">本机服务未连接，当前只预览界面。</p>
+        <p className="preview-note">{t("previewOffline")}</p>
       ) : null}
       <div className="session-scroll">
         {sessions.length === 0 ? (
-          <p className="empty-list">还没有会话</p>
+          <p className="empty-list">{t("noSessions")}</p>
         ) : (
           <ul className="session-list">
             {sessions.map((session) => (
@@ -200,14 +218,15 @@ function SettingsNav({
   onSection: (section: SettingsSection) => void;
   onBack: () => void;
 }) {
+  const { t } = useAppearance();
   return (
     <>
       <div className="settings-top">
-        <button className="back-arrow" type="button" aria-label="返回" onClick={onBack}>
+        <button className="back-arrow" type="button" aria-label={t("back")} onClick={onBack}>
           <BackArrow />
         </button>
       </div>
-      <nav className="session-scroll" aria-label="设置">
+      <nav className="session-scroll" aria-label={t("settings")}>
         <ul className="session-list">
           <li>
             <button
@@ -217,7 +236,7 @@ function SettingsNav({
               onClick={() => onSection("user")}
             >
               <UserSettingsIcon />
-              用户设置
+              {t("userSettings")}
             </button>
           </li>
           <li>
@@ -228,7 +247,7 @@ function SettingsNav({
               onClick={() => onSection("appearance")}
             >
               <AppearanceIcon />
-              外观
+              {t("appearance")}
             </button>
           </li>
           <li>
@@ -239,7 +258,7 @@ function SettingsNav({
               onClick={() => onSection("connections")}
             >
               <ConnectionsIcon />
-              API/MCPs配置
+              {t("connections")}
             </button>
           </li>
         </ul>
@@ -313,6 +332,21 @@ function GearIcon() {
         stroke="currentColor"
         strokeWidth="1.8"
         strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function SwitchIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+      <path
+        d="M4.5 8.5h13m0 0-3.2-3.2m3.2 3.2-3.2 3.2M19.5 15.5h-13m0 0 3.2-3.2m-3.2 3.2 3.2 3.2"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
       />
     </svg>
   );

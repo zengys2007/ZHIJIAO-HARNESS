@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useAppearance } from "../lib/appearance";
 import { codePointLength } from "../lib/text";
 
 type Props = {
@@ -35,15 +36,12 @@ function isValidDisplayName(value: string): boolean {
   return n >= 1 && n <= 32;
 }
 
-const USERNAME_ERROR = "用户名写成 1 到 32 个字，中间不要有空格。";
-const PASSWORD_ERROR = "密码写成 8 到 128 个字。";
-const DISPLAY_NAME_ERROR = "显示名写成 1 到 32 个字。";
-
 // 演示账号：本地开发库里的冒烟账号，仅用于一键填充演示
 const DEMO_USERNAME = "smoketest";
 const DEMO_PASSWORD = "smoke-test-123";
 
 export function AuthForm({ onLogin, onRegister }: Props) {
+  const { t } = useAppearance();
   const [mode, setMode] = useState<Mode>("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -57,9 +55,9 @@ export function AuthForm({ onLogin, onRegister }: Props) {
   function validate(): boolean {
     const u = trimUsername(username);
     const errs: typeof clientErrors = {};
-    if (!isValidUsername(u)) errs.username = USERNAME_ERROR;
-    if (!isValidPassword(password)) errs.password = PASSWORD_ERROR;
-    if (!isLogin && !isValidDisplayName(displayName.trim())) errs.display_name = DISPLAY_NAME_ERROR;
+    if (!isValidUsername(u)) errs.username = t("usernameError");
+    if (!isValidPassword(password)) errs.password = t("passwordError");
+    if (!isLogin && !isValidDisplayName(displayName.trim())) errs.display_name = t("displayNameError");
     setClientErrors(errs);
     return Object.keys(errs).length === 0;
   }
@@ -102,10 +100,10 @@ export function AuthForm({ onLogin, onRegister }: Props) {
   return (
     <div className="auth-wrap">
       <div className="auth-card">
-        <h1 className="auth-title">{isLogin ? "登录" : "注册"}</h1>
+        <h1 className="auth-title">{isLogin ? t("signIn") : t("register")}</h1>
         <form className="auth-form" onSubmit={handleSubmit} noValidate>
           <label className="auth-field">
-            <span>用户名</span>
+            <span>{t("username")}</span>
             <input
               name="username"
               autoComplete="username"
@@ -115,14 +113,14 @@ export function AuthForm({ onLogin, onRegister }: Props) {
               onChange={(e) => setUsername(e.target.value)}
               onBlur={() => {
                 const u = trimUsername(username);
-                if (u && !isValidUsername(u)) setClientErrors((p) => ({ ...p, username: USERNAME_ERROR }));
+                if (u && !isValidUsername(u)) setClientErrors((p) => ({ ...p, username: t("usernameError") }));
               }}
             />
             {clientErrors.username ? <small className="auth-error">{clientErrors.username}</small> : null}
           </label>
 
           <label className="auth-field">
-            <span>密码</span>
+            <span>{t("password")}</span>
             <input
               name="password"
               type="password"
@@ -132,7 +130,7 @@ export function AuthForm({ onLogin, onRegister }: Props) {
               aria-invalid={Boolean(clientErrors.password)}
               onChange={(e) => setPassword(e.target.value)}
               onBlur={() => {
-                if (password && !isValidPassword(password)) setClientErrors((p) => ({ ...p, password: PASSWORD_ERROR }));
+                if (password && !isValidPassword(password)) setClientErrors((p) => ({ ...p, password: t("passwordError") }));
               }}
             />
             {clientErrors.password ? <small className="auth-error">{clientErrors.password}</small> : null}
@@ -141,7 +139,7 @@ export function AuthForm({ onLogin, onRegister }: Props) {
           {!isLogin ? (
             <label className="auth-field">
               <span>
-                显示名 <em className="auth-optional">（可空，留空则使用用户名）</em>
+                {t("displayName")} <em className="auth-optional">{t("displayNameOptional")}</em>
               </span>
               <input
                 name="display-name"
@@ -153,7 +151,7 @@ export function AuthForm({ onLogin, onRegister }: Props) {
                 onBlur={() => {
                   const trimmed = displayName.trim();
                   if (trimmed && !isValidDisplayName(trimmed))
-                    setClientErrors((p) => ({ ...p, display_name: DISPLAY_NAME_ERROR }));
+                    setClientErrors((p) => ({ ...p, display_name: t("displayNameError") }));
                 }}
               />
               {clientErrors.display_name ? <small className="auth-error">{clientErrors.display_name}</small> : null}
@@ -167,29 +165,29 @@ export function AuthForm({ onLogin, onRegister }: Props) {
           ) : null}
 
           <button type="submit" className="auth-submit" disabled={submitting}>
-            {submitting ? (isLogin ? "正在登录" : "正在注册") : isLogin ? "登录" : "注册"}
+            {submitting ? (isLogin ? t("signingIn") : t("signingUp")) : isLogin ? t("signIn") : t("register")}
           </button>
 
           <p className="auth-switch">
             {isLogin ? (
               <>
-                没有账号？
+                {t("noAccount")}
                 <button type="button" className="auth-link" disabled={submitting} onClick={() => switchMode("register")}>
-                  去注册
+                  {t("goRegister")}
                 </button>
               </>
             ) : (
               <>
-                已有账号？
+                {t("hasAccount")}
                 <button type="button" className="auth-link" disabled={submitting} onClick={() => switchMode("login")}>
-                  去登录
+                  {t("goLogin")}
                 </button>
               </>
             )}
           </p>
           {isLogin ? (
             <button type="button" className="auth-demo-fill" disabled={submitting} onClick={fillDemo}>
-              填充演示账号
+              {t("fillDemo")}
             </button>
           ) : null}
         </form>

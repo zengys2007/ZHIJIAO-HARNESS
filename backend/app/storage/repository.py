@@ -95,6 +95,30 @@ class SqliteRepository:
         with self.transaction():
             self._conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
 
+    def create_remember_token(self, token_digest: str, user_id: str, expires_at: str) -> None:
+        with self.transaction():
+            self._conn.execute(
+                "INSERT INTO remember_tokens (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
+                (token_digest, user_id, expires_at, _now()),
+            )
+
+    def user_id_for_remember_token(self, token_digest: str, now: str) -> str | None:
+        """过期即删并返回 None。expires_at 与 now 都是 UTC 的 Z 格式，可直接比较。"""
+        row = self._conn.execute(
+            "SELECT user_id, expires_at FROM remember_tokens WHERE token_hash = ?",
+            (token_digest,),
+        ).fetchone()
+        if row is None:
+            return None
+        if row["expires_at"] <= now:
+            self.delete_remember_token(token_digest)
+            return None
+        return row["user_id"]
+
+    def delete_remember_token(self, token_digest: str) -> None:
+        with self.transaction():
+            self._conn.execute("DELETE FROM remember_tokens WHERE token_hash = ?", (token_digest,))
+
     def create_task(self, raw_request: str, preset_hint: str | None) -> Task:
         if not isinstance(raw_request, str) or raw_request.strip() == "" or len(raw_request) > MAX_REQUEST_CHARS:
             raise InputError("invalid task request")
@@ -438,6 +462,12 @@ class SqliteRepository:
             );
             CREATE TABLE IF NOT EXISTS sessions (
               id TEXT PRIMARY KEY,
+              user_id TEXT NOT NULL,
+              expires_at TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS remember_tokens (
+              token_hash TEXT PRIMARY KEY,
               user_id TEXT NOT NULL,
               expires_at TEXT NOT NULL,
               created_at TEXT NOT NULL
