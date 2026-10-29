@@ -5,6 +5,8 @@ import type { ApprovalMode } from "../types/api";
 type Props = {
   approvalMode: ApprovalMode;
   onApprovalModeChange: (mode: ApprovalMode) => void;
+  /** 打开系统文件选择器 */
+  onPickFile: () => void;
   /** 打开设置里的模型/API 连接页 */
   onOpenModel: () => void;
   /** 点击未实现的功能项时触发 */
@@ -18,13 +20,19 @@ type Item = {
   /** 右侧灰色描述；权限项由运行时计算 */
   desc?: string;
   icon: React.ReactNode;
-  kind: "plain" | "permission" | "model";
+  kind: "plain" | "permission" | "model" | "file";
 };
 
 /** 未实现项点击后的统一提示文案 */
 export const UNAVAILABLE_TOAST = "该功能尚未开放";
 
-export function PlusMenu({ approvalMode, onApprovalModeChange, onOpenModel, onUnavailable }: Props) {
+export function PlusMenu({
+  approvalMode,
+  onApprovalModeChange,
+  onPickFile,
+  onOpenModel,
+  onUnavailable,
+}: Props) {
   const { locale, t } = useAppearance();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -52,7 +60,7 @@ export function PlusMenu({ approvalMode, onApprovalModeChange, onOpenModel, onUn
     {
       title: t("add"),
       items: [
-        { key: "file", label: t("file"), en: "file", icon: <FileIcon />, kind: "plain" },
+        { key: "file", label: t("file"), en: "file", icon: <FileIcon />, kind: "file" },
         { key: "goal", label: t("goal"), en: "goal", desc: t("goalDesc"), icon: <GoalIcon />, kind: "plain" },
         { key: "plan", label: t("plan"), en: "plan", desc: t("planDesc"), icon: <PlanIcon />, kind: "plain" },
         { key: "feedback", label: t("feedback"), en: "feedback", desc: t("feedbackDesc"), icon: <FeedbackIcon />, kind: "plain" },
@@ -73,6 +81,11 @@ export function PlusMenu({ approvalMode, onApprovalModeChange, onOpenModel, onUn
     if (item.kind === "permission") {
       // 在手动 / 自动间直接切换，菜单保持打开以查看当前状态
       onApprovalModeChange(approvalMode === "manual" ? "auto" : "manual");
+      return;
+    }
+    if (item.kind === "file") {
+      onPickFile();
+      setOpen(false);
       return;
     }
     if (item.kind === "model") {

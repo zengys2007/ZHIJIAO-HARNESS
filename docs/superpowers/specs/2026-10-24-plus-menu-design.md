@@ -2,7 +2,7 @@
 
 ## 目标
 
-在教师工作台输入框左下角加一个 `+` 按钮，点击向上弹出两段式菜单（参照 Cursor 的加号菜单）。8 个菜单项中"权限"切换审批模式，"模型"打开设置里的 API/MCPs 配置；其余 6 项点击后显示自动消散的轻提示"该功能尚未开放"。
+在教师工作台输入框左下角加一个 `+` 按钮，点击向上弹出两段式菜单（参照 Cursor 的加号菜单）。「权限」切换审批模式，「模型」打开设置里的 API/MCPs 配置，「文件」打开本机文件选择；其余项点击后显示自动消散的轻提示「该功能尚未开放」。
 
 ## 交互
 
@@ -22,25 +22,26 @@
 
 ## 行为
 
-- **权限**：点击在"手动审批 / 自动执行"间直接切换；行右侧描述显示当前模式（如"当前：手动审批"，带 ✓）；与左下角现有审批控制器双向同步（同一个 `approvalMode` state，两处入口）；现有审批控制器保留。
-- **模型**：点击后菜单关闭，进入设置视图并选中「API/MCPs配置」。不新增会话级模型字段，也不改发消息 API；对话仍使用进程环境中的模型。配置页继续用现有 `GET /api/llm/config` 与 `POST /api/llm/probe`。
-- **其余 6 项**：点击后菜单关闭，弹出约 2.5 秒自动消散的 toast："该功能尚未开放"。不打断输入框焦点。
+- **权限**：点击在「手动审批 / 自动执行」间直接切换；行右侧描述显示当前模式（如「当前：手动审批」，带 ✓）；与左下角现有审批控制器双向同步（同一个 `approvalMode` state，两处入口）；现有审批控制器保留。
+- **模型**：点击后菜单关闭，进入设置视图并选中「API/MCPs配置」。不新增会话级模型字段，也不改发消息 API。
+- **文件**：点击后菜单关闭，打开系统文件选择器。仅接受 Excel / Word / PDF / 图片；选中项进入输入区上方附件条。文档可改显示名与移除，图片可预览与移除。本阶段不上传、不解析、不改发消息契约。细节见 `2026-10-29-composer-attachments-design.md`。
+- **其余项**：点击后菜单关闭，弹出约 2.5 秒自动消散的 toast：「该功能尚未开放」。不打断输入框焦点。
 - 未实现项不做置灰，视觉与参照图一致。
 
 ## 实现落点
 
-- 组件 `frontend/src/components/PlusMenu.tsx`：自包含弹层 + 8 项图标/文案；props 为 `approvalMode`、`onApprovalModeChange`、`onOpenModel`、`onUnavailable`。
-- `frontend/src/components/Composer.tsx`：footer 行左侧加 `leadingSlot` 插槽。
-- `frontend/src/pages/Workbench.tsx`：toast 状态（条件渲染 + 定时消散）；把 `approvalMode`、切模式回调与打开连接设置回调传给 PlusMenu。
-- `frontend/src/styles.css`：复用审批弹层视觉变量，新增 `.plus-*` 与 `.toast` 样式。
+- 组件 `frontend/src/components/PlusMenu.tsx`：自包含弹层 + 8 项图标/文案；props 为 `approvalMode`、`onApprovalModeChange`、`onPickFile`、`onOpenModel`、`onUnavailable`。
+- `frontend/src/components/Composer.tsx`：`leadingSlot` 与 `attachmentSlot`。
+- `frontend/src/pages/Workbench.tsx`：toast、附件状态、隐藏 file input。
+- `frontend/src/styles.css`：`.plus-*`、`.toast`、`.attachment-*`。
 
 ## 测试
 
-- vitest：菜单开合；点"权限"后审批控制器标签同步切换；点"模型"进入 API/MCPs 配置；点其他未实现项出现"尚未开放"toast。
+- vitest：菜单开合；点「权限」后审批控制器同步；点「模型」进入 API/MCPs；点「文件」出现附件条并可改名/移除；点其他未实现项出现「尚未开放」toast。
 - 通过标准：typecheck 零错误，相关用例全绿。
 
 ## 不做
 
-- 不实现文件附加、目标、计划模式、反馈通道、对话压缩、会话级多模型覆盖、导出 ZIP 的任何后端或前端真实功能。
+- 不实现目标、计划模式、反馈通道、对话压缩、会话级多模型覆盖、导出 ZIP。
 - 不改动既有审批控制器与其弹层行为。
-- 不改后端发消息契约；「自行填写」的探测结果不会自动写回进程环境或重启服务。
+- 附件不上传、不解析、不写入会话；发消息仍只带文本 `content`。

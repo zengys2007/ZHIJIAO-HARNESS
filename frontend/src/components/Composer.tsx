@@ -6,18 +6,30 @@ type ComposerProps = {
   alert: string | null;
   onChange: (value: string) => void;
   onSubmit: () => void;
+  /** 可选：输入框上方的附件条 */
+  attachmentSlot?: React.ReactNode;
   /** 可选：输入框左下角最左侧的插槽（加号菜单） */
   leadingSlot?: React.ReactNode;
   /** 可选：嵌入输入框左下角的审批分段控制器 */
   approvalSegment?: React.ReactNode;
 };
 
-export function Composer({ value, busy, alert, onChange, onSubmit, leadingSlot, approvalSegment }: ComposerProps) {
+export function Composer({
+  value,
+  busy,
+  alert,
+  onChange,
+  onSubmit,
+  attachmentSlot,
+  leadingSlot,
+  approvalSegment,
+}: ComposerProps) {
   const { t } = useAppearance();
   const canSend = !busy && value.trim().length > 0;
 
   return (
     <div className="dock">
+      {attachmentSlot}
       <form
         className="composer"
         onSubmit={(event) => {

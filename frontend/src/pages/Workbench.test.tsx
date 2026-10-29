@@ -254,12 +254,66 @@ describe("工作台", () => {
     await screen.findByRole("button", { name: "发送" });
 
     await user.click(screen.getByRole("button", { name: "更多操作" }));
-    await user.click(screen.getByRole("menuitem", { name: /文件/ }));
+    await user.click(screen.getByRole("menuitem", { name: /目标/ }));
 
     // 菜单关闭，出现 toast
     expect(screen.queryByRole("menu")).toBeNull();
     const status = screen.getByRole("status");
     expect(status.textContent).toContain("该功能尚未开放");
+  });
+
+  it("可把文件拖入整个工作台加入附件条，并拒绝不支持类型", async () => {
+    renderLoggedIn();
+    await screen.findByRole("button", { name: "发送" });
+
+    const surface = screen.getByTestId("workbench-drop");
+    const doc = new File(["hello"], "教案.docx", {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
+    const bad = new File(["x"], "病毒.exe", { type: "application/octet-stream" });
+
+    fireEvent.dragEnter(surface, { dataTransfer: { types: ["Files"] } });
+    expect(surface.className).toContain("is-drop-target");
+
+    fireEvent.drop(surface, { dataTransfer: { files: [doc, bad], types: ["Files"] } });
+    expect(screen.getByRole("list", { name: "附件" })).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "附件名称" })).toHaveProperty("value", "教案.docx");
+    expect(screen.getByRole("status").textContent).toContain("只支持 Excel、Word、PDF 和图片。");
+    expect(surface.className).not.toContain("is-drop-target");
+  });
+
+  it("加号菜单：文件项可选 Word/图片，文档可改名与移除，拒绝不支持类型", async () => {
+    const user = userEvent.setup();
+    renderLoggedIn();
+    await screen.findByRole("button", { name: "发送" });
+
+    const input = screen.getByLabelText("选择文件") as HTMLInputElement;
+    const doc = new File(["hello"], "教案.docx", {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
+    const image = new File(["img"], "板书.png", { type: "image/png" });
+    const bad = new File(["x"], "病毒.exe", { type: "application/octet-stream" });
+
+    await user.upload(input, [doc, image]);
+
+    expect(screen.getByRole("list", { name: "附件" })).toBeTruthy();
+    const nameInput = screen.getByRole("textbox", { name: "附件名称" }) as HTMLInputElement;
+    expect(nameInput.value).toBe("教案.docx");
+    expect(screen.getByText("板书.png")).toBeTruthy();
+
+    // userEvent.upload 会按 accept 过滤；用不支持类型直接触发 change 测 toast
+    fireEvent.change(input, { target: { files: [bad] } });
+    expect(screen.getByRole("status").textContent).toContain("只支持 Excel、Word、PDF 和图片。");
+
+    await user.clear(nameInput);
+    await user.type(nameInput, "新教案.docx");
+    expect(nameInput.value).toBe("新教案.docx");
+
+    const removeButtons = screen.getAllByRole("button", { name: "移除附件" });
+    expect(removeButtons).toHaveLength(2);
+    await user.click(removeButtons[0]);
+    expect(screen.queryByRole("textbox", { name: "附件名称" })).toBeNull();
+    expect(screen.getByText("板书.png")).toBeTruthy();
   });
 
   it("加号菜单：模型项打开设置中的 API/MCPs 配置", async () => {

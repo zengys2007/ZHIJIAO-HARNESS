@@ -17,11 +17,20 @@ import {
 import { previewApi } from "../api/preview";
 import { loadRememberedAccounts, rememberAccount, type RememberedAccount } from "../lib/accounts";
 import { AppearanceProvider, useAppearance } from "../lib/appearance";
+import {
+  ATTACHMENT_ACCEPT,
+  createDraftAttachment,
+  isAllowedAttachment,
+  renameDraftAttachment,
+  revokeDraftAttachment,
+  type DraftAttachment,
+} from "../lib/attachments";
 import type { SessionSummary } from "../lib/sessions";
 import { CONTENT_LIMIT, codePointLength, conversationTitle } from "../lib/text";
 import type { ApprovalMode, AuthResult, AuthUser, ConversationApi, ConversationMessage, TaskSnapshot } from "../types/api";
 import { AccountSwitcher } from "../components/AccountSwitcher";
 import { ApprovalBar } from "../components/ApprovalBar";
+import { AttachmentBar } from "../components/AttachmentBar";
 import { AuthForm } from "../components/AuthForm";
 import { Composer } from "../components/Composer";
 import { PlusMenu } from "../components/PlusMenu";
@@ -110,6 +119,11 @@ function WorkbenchScreen({
   /** 加号菜单未实现项的轻提示 */
   const [toast, setToast] = useState<string | null>(null);
   const toastTimerRef = useRef<number | null>(null);
+  /** 输入区草稿附件（本阶段不上传） */
+  const [attachments, setAttachments] = useState<DraftAttachment[]>([]);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [dropActive, setDropActive] = useState(false);
+  const dragDepthRef = useRef(0);
   /** 正在执行审批动作的 taskId 集合，防止重复点击 */
   const [approving, setApproving] = useState<Set<string>>(new Set());
   const busyRef = useRef(false);
@@ -439,12 +453,52 @@ function WorkbenchScreen({
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2500);
   }
 
+  function clearAttachments() {
+    setAttachments((prev) => {
+      for (const item of prev) revokeDraftAttachment(item);
+      return [];
+    });
+  }
+
+  function handleFilesSelected(list: FileList | File[] | null) {
+    if (!list || list.length === 0) return;
+    const accepted: DraftAttachment[] = [];
+    let rejected = false;
+    for (const file of Array.from(list)) {
+      if (!isAllowedAttachment(file)) {
+        rejected = true;
+        continue;
+      }
+      accepted.push(createDraftAttachment(file));
+    }
+    if (accepted.length > 0) {
+      setAttachments((prev) => [...prev, ...accepted]);
+    }
+    if (rejected) showToast(t("unsupportedFile"));
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  function dropEnabled(): boolean {
+    return authenticated && !submitting;
+  }
+
+  function hasDragFiles(types: readonly string[] | DOMStringList | undefined): boolean {
+    if (!types) return false;
+    return Array.from(types as ArrayLike<string>).includes("Files");
+  }
+
+  function endWorkbenchDrag() {
+    dragDepthRef.current = 0;
+    setDropActive(false);
+  }
+
   function handleNew() {
     if (busyRef.current) return;
     setView("chat");
     setActiveId(null);
     setUnsent([]);
     setDraft("");
+    clearAttachments();
     setBanner(null);
   }
 
@@ -483,7 +537,33 @@ function WorkbenchScreen({
 
   // ===== 渲染 =====
   return (
-    <div className="app">
+    <div
+      className={`app${dropActive ? " is-drop-target" : ""}`}
+      data-testid="workbench-drop"
+      onDragEnter={(event) => {
+        if (!dropEnabled() || !hasDragFiles(event.dataTransfer.types)) return;
+        event.preventDefault();
+        dragDepthRef.current += 1;
+        setDropActive(true);
+      }}
+      onDragOver={(event) => {
+        if (!dropEnabled() || !hasDragFiles(event.dataTransfer.types)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+      }}
+      onDragLeave={(event) => {
+        if (!dropEnabled()) return;
+        event.preventDefault();
+        dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+        if (dragDepthRef.current === 0) setDropActive(false);
+      }}
+      onDrop={(event) => {
+        if (!dropEnabled()) return;
+        event.preventDefault();
+        endWorkbenchDrag();
+        if (event.dataTransfer.files?.length) handleFilesSelected(event.dataTransfer.files);
+      }}
+    >
       <Sidebar
         sessions={sessions}
         activeId={activeId}
@@ -546,6 +626,15 @@ function WorkbenchScreen({
                 void runReject(activeId, taskId, callId);
               }}
             />
+            <input
+              ref={fileInputRef}
+              className="sr-only"
+              type="file"
+              accept={ATTACHMENT_ACCEPT}
+              multiple
+              aria-label={t("chooseFile")}
+              onChange={(event) => handleFilesSelected(event.target.files)}
+            />
             <Composer
               value={draft}
               busy={submitting}
@@ -554,10 +643,28 @@ function WorkbenchScreen({
               onSubmit={() => {
                 void handleSubmit();
               }}
+              attachmentSlot={
+                <AttachmentBar
+                  items={attachments}
+                  onRename={(id, displayName) => {
+                    setAttachments((prev) =>
+                      prev.map((item) => (item.id === id ? renameDraftAttachment(item, displayName) : item)),
+                    );
+                  }}
+                  onRemove={(id) => {
+                    setAttachments((prev) => {
+                      const target = prev.find((item) => item.id === id);
+                      if (target) revokeDraftAttachment(target);
+                      return prev.filter((item) => item.id !== id);
+                    });
+                  }}
+                />
+              }
               leadingSlot={
                 <PlusMenu
                   approvalMode={approvalMode}
                   onApprovalModeChange={setApprovalMode}
+                  onPickFile={() => fileInputRef.current?.click()}
                   onOpenModel={() => {
                     setSettingsSection("connections");
                     setView("settings");
