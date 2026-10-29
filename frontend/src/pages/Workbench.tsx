@@ -558,6 +558,10 @@ function WorkbenchScreen({
                 <PlusMenu
                   approvalMode={approvalMode}
                   onApprovalModeChange={setApprovalMode}
+                  onOpenModel={() => {
+                    setSettingsSection("connections");
+                    setView("settings");
+                  }}
                   onUnavailable={() => showToast(t("unavailable"))}
                 />
               }

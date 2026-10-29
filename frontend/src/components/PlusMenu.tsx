@@ -5,6 +5,8 @@ import type { ApprovalMode } from "../types/api";
 type Props = {
   approvalMode: ApprovalMode;
   onApprovalModeChange: (mode: ApprovalMode) => void;
+  /** 打开设置里的模型/API 连接页 */
+  onOpenModel: () => void;
   /** 点击未实现的功能项时触发 */
   onUnavailable: () => void;
 };
@@ -16,13 +18,13 @@ type Item = {
   /** 右侧灰色描述；权限项由运行时计算 */
   desc?: string;
   icon: React.ReactNode;
-  kind: "plain" | "permission";
+  kind: "plain" | "permission" | "model";
 };
 
 /** 未实现项点击后的统一提示文案 */
 export const UNAVAILABLE_TOAST = "该功能尚未开放";
 
-export function PlusMenu({ approvalMode, onApprovalModeChange, onUnavailable }: Props) {
+export function PlusMenu({ approvalMode, onApprovalModeChange, onOpenModel, onUnavailable }: Props) {
   const { locale, t } = useAppearance();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -61,7 +63,7 @@ export function PlusMenu({ approvalMode, onApprovalModeChange, onUnavailable }: 
       items: [
         { key: "compact", label: t("compact"), en: "compact", desc: t("compactDesc"), icon: <CompactIcon />, kind: "plain" },
         { key: "permission", label: t("permission"), en: "permission", desc: permissionDesc, icon: <ShieldIcon />, kind: "permission" },
-        { key: "model", label: t("model"), en: "model", desc: t("modelDesc"), icon: <ChipIcon />, kind: "plain" },
+        { key: "model", label: t("model"), en: "model", desc: t("modelDesc"), icon: <ChipIcon />, kind: "model" },
         { key: "export", label: t("exportLogs"), en: "export", desc: t("exportDesc"), icon: <DownloadIcon />, kind: "plain" },
       ],
     },
@@ -71,6 +73,11 @@ export function PlusMenu({ approvalMode, onApprovalModeChange, onUnavailable }: 
     if (item.kind === "permission") {
       // 在手动 / 自动间直接切换，菜单保持打开以查看当前状态
       onApprovalModeChange(approvalMode === "manual" ? "auto" : "manual");
+      return;
+    }
+    if (item.kind === "model") {
+      onOpenModel();
+      setOpen(false);
       return;
     }
     onUnavailable();

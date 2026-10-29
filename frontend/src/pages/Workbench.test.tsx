@@ -254,12 +254,32 @@ describe("工作台", () => {
     await screen.findByRole("button", { name: "发送" });
 
     await user.click(screen.getByRole("button", { name: "更多操作" }));
-    await user.click(screen.getByRole("menuitem", { name: /模型/ }));
+    await user.click(screen.getByRole("menuitem", { name: /文件/ }));
 
     // 菜单关闭，出现 toast
     expect(screen.queryByRole("menu")).toBeNull();
     const status = screen.getByRole("status");
     expect(status.textContent).toContain("该功能尚未开放");
+  });
+
+  it("加号菜单：模型项打开设置中的 API/MCPs 配置", async () => {
+    const user = userEvent.setup();
+    renderLoggedIn({
+      loadSources: async () => ({
+        environment: { base_url: "http://env.test/v1", model: "env-model", has_api_key: true },
+        dotenv: { base_url: "http://file.test/v1", model: "file-model", has_api_key: true },
+      }),
+      probe: async () => ({ reachable: true }),
+    });
+    await screen.findByRole("button", { name: "发送" });
+
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    await user.click(screen.getByRole("menuitem", { name: /模型/ }));
+
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.getByRole("navigation", { name: "设置" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "API/MCPs配置" }).getAttribute("aria-current")).toBe("page");
+    expect(screen.getByRole("heading", { name: "API/MCPs配置" })).toBeTruthy();
   });
 
   it("登录界面：一键填充演示账号（只填充不登录）", async () => {
