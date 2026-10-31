@@ -19,6 +19,16 @@ from app.api.auth import (
     parse_resume,
 )
 from app.api.errors import error_payload
+from app.api.goals import (
+    GoalRequestError,
+    node_view,
+    parse_create_node,
+    parse_create_tree,
+    parse_reorder,
+    parse_update_node,
+    parse_update_tree,
+    tree_view,
+)
 from app.api.messages import RequestError, parse_create_conversation, parse_message
 from app.api.probe import parse_probe
 from app.api.views import conversation_payload, task_payload
@@ -34,13 +44,14 @@ from app.auth.sessions import (
 )
 from app.config import Settings, dotenv_llm, load_env_file, load_settings, process_llm
 from app.context.prompt import load_system_prompt
+from app.goals.templates import semester_seed
 from app.graph.build import build_graph
 from app.llm.complete import make_complete
 from app.llm.probe import probe_chat
 from app.preview.serve import load_preview
 from app.storage import open_repository
 from app.storage.files import FileStore
-from app.storage.protocol import ConflictError, NotFoundError, User
+from app.storage.protocol import ConflictError, InputError, NotFoundError, User
 from app.tasks.runner import fail_stale_tasks, run_turn
 from app.tools.registry import assert_projection_budget, production_registry
 
@@ -316,6 +327,149 @@ def create_app(settings: Settings | None = None, complete=None, probe=None, env_
             "dotenv": _public_llm(dotenv),
         }
 
+    @app.get("/api/goal-trees")
+    def list_goal_trees(
+        request: Request,
+        subject: str | None = None,
+        grade: int | None = None,
+        term: str | None = None,
+    ):
+        user, denied = require_user(request)
+        if denied is not None:
+            return denied
+        trees = repository.list_goal_trees(user.id, subject=subject, grade=grade, term=term)
+        return {"trees": [tree_view(t) for t in trees]}
+
+    @app.post("/api/goal-trees")
+    async def create_goal_tree(request: Request):
+        user, denied = require_user(request)
+        if denied is not None:
+            return denied
+        try:
+            body = json.loads(await request.body() or b"null")
+            subject, grade, term, title, template_init = parse_create_tree(body)
+        except json.JSONDecodeError:
+            return JSONResponse(error_payload("invalid_input"), status_code=400)
+        except GoalRequestError as exc:
+            return JSONResponse(error_payload("invalid_input", exc.public_message), status_code=400)
+        tree = repository.create_goal_tree(user.id, subject, grade, term, title)
+        if template_init:
+            for seed in semester_seed(subject):
+                repository.create_goal_node(
+                    tree.id, user.id, None, "semester",
+                    seed["title"], seed["description"], [], seed["verify_criteria"],
+                )
+        return JSONResponse(tree_view(tree), status_code=201)
+
+    @app.get("/api/goal-trees/{tree_id}")
+    def read_goal_tree(tree_id: str, request: Request):
+        user, denied = require_user(request)
+        if denied is not None:
+            return denied
+        tree = repository.get_goal_tree_for_owner(tree_id, user.id)
+        if tree is None:
+            return JSONResponse(error_payload("not_found", "没有找到这份目标树。"), status_code=404)
+        nodes = repository.list_goal_nodes(tree_id, user.id) or []
+        return {"tree": tree_view(tree), "nodes": [node_view(n) for n in nodes]}
+
+    @app.patch("/api/goal-trees/{tree_id}")
+    async def update_goal_tree(tree_id: str, request: Request):
+        user, denied = require_user(request)
+        if denied is not None:
+            return denied
+        try:
+            body = json.loads(await request.body() or b"null")
+            title = parse_update_tree(body)
+        except json.JSONDecodeError:
+            return JSONResponse(error_payload("invalid_input"), status_code=400)
+        except GoalRequestError as exc:
+            return JSONResponse(error_payload("invalid_input", exc.public_message), status_code=400)
+        tree = repository.rename_goal_tree(tree_id, user.id, title)
+        if tree is None:
+            return JSONResponse(error_payload("not_found", "没有找到这份目标树。"), status_code=404)
+        return tree_view(tree)
+
+    @app.delete("/api/goal-trees/{tree_id}")
+    def delete_goal_tree(tree_id: str, request: Request):
+        user, denied = require_user(request)
+        if denied is not None:
+            return denied
+        if not repository.delete_goal_tree(tree_id, user.id):
+            return JSONResponse(error_payload("not_found", "没有找到这份目标树。"), status_code=404)
+        return Response(status_code=204)
+
+    @app.post("/api/goal-trees/{tree_id}/nodes")
+    async def create_goal_node(tree_id: str, request: Request):
+        user, denied = require_user(request)
+        if denied is not None:
+            return denied
+        try:
+            body = json.loads(await request.body() or b"null")
+            fields = parse_create_node(body)
+        except json.JSONDecodeError:
+            return JSONResponse(error_payload("invalid_input"), status_code=400)
+        except GoalRequestError as exc:
+            return JSONResponse(error_payload("invalid_input", exc.public_message), status_code=400)
+        try:
+            node = repository.create_goal_node(tree_id, user.id, **fields)
+        except NotFoundError:
+            return JSONResponse(error_payload("not_found", "没有找到这份目标树或上级目标。"), status_code=404)
+        except InputError as exc:
+            return JSONResponse(error_payload("invalid_input", _goal_rule_message(exc)), status_code=400)
+        except ConflictError:
+            return JSONResponse(error_payload("conflict", "这一层的目标数量已达上限。"), status_code=409)
+        return JSONResponse(node_view(node), status_code=201)
+
+    @app.patch("/api/goal-nodes/{node_id}")
+    async def update_goal_node(node_id: str, request: Request):
+        user, denied = require_user(request)
+        if denied is not None:
+            return denied
+        try:
+            body = json.loads(await request.body() or b"null")
+            fields = parse_update_node(body)
+        except json.JSONDecodeError:
+            return JSONResponse(error_payload("invalid_input"), status_code=400)
+        except GoalRequestError as exc:
+            return JSONResponse(error_payload("invalid_input", exc.public_message), status_code=400)
+        node = repository.update_goal_node(node_id, user.id, **fields)
+        if node is None:
+            return JSONResponse(error_payload("not_found", "没有找到这条目标。"), status_code=404)
+        return node_view(node)
+
+    @app.delete("/api/goal-nodes/{node_id}")
+    def delete_goal_node(node_id: str, request: Request):
+        user, denied = require_user(request)
+        if denied is not None:
+            return denied
+        try:
+            repository.delete_goal_node(node_id, user.id)
+        except NotFoundError:
+            return JSONResponse(error_payload("not_found", "没有找到这条目标。"), status_code=404)
+        except ConflictError:
+            return JSONResponse(error_payload("conflict", "先删除或移走这条目标下的子目标。"), status_code=409)
+        return Response(status_code=204)
+
+    @app.post("/api/goal-nodes/{node_id}/reorder")
+    async def reorder_goal_node(node_id: str, request: Request):
+        user, denied = require_user(request)
+        if denied is not None:
+            return denied
+        try:
+            body = json.loads(await request.body() or b"null")
+            direction = parse_reorder(body)
+        except json.JSONDecodeError:
+            return JSONResponse(error_payload("invalid_input"), status_code=400)
+        except GoalRequestError as exc:
+            return JSONResponse(error_payload("invalid_input", exc.public_message), status_code=400)
+        try:
+            repository.reorder_goal_node(node_id, user.id, direction)
+        except NotFoundError:
+            return JSONResponse(error_payload("not_found", "没有找到这条目标。"), status_code=404)
+        except InputError:
+            return JSONResponse(error_payload("invalid_input"), status_code=400)
+        return {"ok": True}
+
     def preview(artifact_id: str, version: int, relative_path: str = ""):
         result = load_preview(store, artifact_id, version, relative_path)
         if result.status != 200:
@@ -350,6 +504,17 @@ def _public_llm(values: dict[str, str]) -> dict:
         "model": values["model"],
         "has_api_key": bool(values["api_key"]),
     }
+
+
+_GOAL_RULE_MESSAGES = {
+    "root goal nodes must be semester or unit": "学期总目标和单元直接挂在根上，课时目标需要挂在单元下。",
+    "lesson nodes can only sit under a unit": "课时目标只能挂在单元下。",
+    "invalid goal level": "目标层级不合法。",
+}
+
+
+def _goal_rule_message(exc: InputError) -> str:
+    return _GOAL_RULE_MESSAGES.get(str(exc), "目标层级或位置不合法。")
 
 
 if __name__ == "__main__":
