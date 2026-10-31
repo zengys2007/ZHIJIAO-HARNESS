@@ -14,6 +14,9 @@ from app.storage.protocol import (
     ConflictError,
     ConversationSummary,
     Event,
+    GOAL_LEVELS,
+    GoalNode,
+    GoalTree,
     InputError,
     NotFoundError,
     Session,
@@ -26,6 +29,9 @@ from app.tasks.states import transition as change_status
 EVENT_TYPES = {"user_message", "assistant_message", "tool_result", "artifact_published"}
 MAX_REQUEST_CHARS = 4000
 LOCAL_ADMIN = "local-admin"
+MAX_SEMESTER_NODES = 20
+MAX_UNIT_NODES = 30
+MAX_LESSON_NODES = 40
 
 
 class SqliteRepository:
@@ -416,6 +422,264 @@ class SqliteRepository:
             metadata=record.metadata,
         )
 
+    # ===== 目标与计划：目标树 =====
+
+    def create_goal_tree(self, owner_id: str, subject: str, grade: int, term: str, title: str) -> GoalTree:
+        tree_id = uuid4().hex
+        now = _now()
+        with self.transaction():
+            self._conn.execute(
+                """
+                INSERT INTO goal_trees (id, owner_id, subject, grade, term, title, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (tree_id, owner_id, subject, grade, term, title, now, now),
+            )
+        return GoalTree(
+            id=tree_id, owner_id=owner_id, subject=subject, grade=grade, term=term,
+            title=title, created_at=now, updated_at=now,
+        )
+
+    def list_goal_trees(
+        self, owner_id: str, subject: str | None = None, grade: int | None = None, term: str | None = None
+    ) -> list[GoalTree]:
+        clauses = ["owner_id = ?"]
+        params: list = [owner_id]
+        if subject is not None:
+            clauses.append("subject = ?")
+            params.append(subject)
+        if grade is not None:
+            clauses.append("grade = ?")
+            params.append(grade)
+        if term is not None:
+            clauses.append("term = ?")
+            params.append(term)
+        rows = self._conn.execute(
+            f"SELECT * FROM goal_trees WHERE {' AND '.join(clauses)} ORDER BY updated_at DESC, id DESC",
+            params,
+        ).fetchall()
+        return [_goal_tree(row) for row in rows]
+
+    def get_goal_tree_for_owner(self, tree_id: str, owner_id: str) -> GoalTree | None:
+        row = self._conn.execute(
+            "SELECT * FROM goal_trees WHERE id = ? AND owner_id = ?", (tree_id, owner_id)
+        ).fetchone()
+        return _goal_tree(row) if row else None
+
+    def rename_goal_tree(self, tree_id: str, owner_id: str, title: str) -> GoalTree | None:
+        with self.transaction():
+            found = self._conn.execute(
+                "SELECT id FROM goal_trees WHERE id = ? AND owner_id = ?", (tree_id, owner_id)
+            ).fetchone()
+            if found is None:
+                return None
+            self._conn.execute(
+                "UPDATE goal_trees SET title = ?, updated_at = ? WHERE id = ?",
+                (title, _now(), tree_id),
+            )
+        return self.get_goal_tree_for_owner(tree_id, owner_id)
+
+    def delete_goal_tree(self, tree_id: str, owner_id: str) -> bool:
+        with self.transaction():
+            found = self._conn.execute(
+                "SELECT id FROM goal_trees WHERE id = ? AND owner_id = ?", (tree_id, owner_id)
+            ).fetchone()
+            if found is None:
+                return False
+            self._conn.execute("DELETE FROM goal_nodes WHERE tree_id = ?", (tree_id,))
+            self._conn.execute("DELETE FROM goal_trees WHERE id = ?", (tree_id,))
+        return True
+
+    def list_goal_nodes(self, tree_id: str, owner_id: str) -> list[GoalNode] | None:
+        if self.get_goal_tree_for_owner(tree_id, owner_id) is None:
+            return None
+        rows = self._conn.execute(
+            """
+            SELECT * FROM goal_nodes WHERE tree_id = ?
+            ORDER BY parent_id IS NOT NULL, parent_id, sort_order, created_at, id
+            """,
+            (tree_id,),
+        ).fetchall()
+        return [_goal_node(row) for row in rows]
+
+    def create_goal_node(
+        self,
+        tree_id: str,
+        owner_id: str,
+        parent_id: str | None,
+        level: str,
+        title: str,
+        description: str,
+        standard_refs: list,
+        verify_criteria: str,
+    ) -> GoalNode:
+        if level not in GOAL_LEVELS:
+            raise InputError("invalid goal level")
+        node_id = uuid4().hex
+        now = _now()
+        with self.transaction():
+            if self.get_goal_tree_for_owner(tree_id, owner_id) is None:
+                raise NotFoundError("goal tree not found")
+            if parent_id is None:
+                if level not in ("semester", "unit"):
+                    raise InputError("root goal nodes must be semester or unit")
+                row = self._conn.execute(
+                    "SELECT COUNT(*) AS c FROM goal_nodes WHERE tree_id = ? AND level = ?",
+                    (tree_id, level),
+                ).fetchone()
+                limit = MAX_SEMESTER_NODES if level == "semester" else MAX_UNIT_NODES
+                if int(row["c"]) >= limit:
+                    raise ConflictError("goal node limit reached")
+                sibling_where = "tree_id = ? AND parent_id IS NULL AND level = ?"
+                sibling_params: tuple = (tree_id, level)
+            else:
+                parent = self._conn.execute(
+                    "SELECT level FROM goal_nodes WHERE id = ? AND tree_id = ?", (parent_id, tree_id)
+                ).fetchone()
+                if parent is None:
+                    raise NotFoundError("parent goal node not found")
+                if parent["level"] != "unit" or level != "lesson":
+                    raise InputError("lesson nodes can only sit under a unit")
+                row = self._conn.execute(
+                    "SELECT COUNT(*) AS c FROM goal_nodes WHERE parent_id = ?", (parent_id,)
+                ).fetchone()
+                if int(row["c"]) >= MAX_LESSON_NODES:
+                    raise ConflictError("goal node limit reached")
+                sibling_where = "parent_id = ?"
+                sibling_params = (parent_id,)
+            sort_row = self._conn.execute(
+                f"SELECT COALESCE(MAX(sort_order), 0) + 1 AS s FROM goal_nodes WHERE {sibling_where}",
+                sibling_params,
+            ).fetchone()
+            self._conn.execute(
+                """
+                INSERT INTO goal_nodes (
+                  id, tree_id, parent_id, level, title, description,
+                  standard_refs, verify_criteria, sort_order, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    node_id, tree_id, parent_id, level, title, description,
+                    json.dumps(standard_refs, ensure_ascii=False), verify_criteria,
+                    int(sort_row["s"]), now, now,
+                ),
+            )
+            self._conn.execute(
+                "UPDATE goal_trees SET updated_at = ? WHERE id = ?", (now, tree_id)
+            )
+        node = self._goal_node_by_id(node_id)
+        if node is None:
+            raise RuntimeError("goal node insert failed")
+        return node
+
+    def update_goal_node(
+        self,
+        node_id: str,
+        owner_id: str,
+        title: str,
+        description: str,
+        standard_refs: list,
+        verify_criteria: str,
+    ) -> GoalNode | None:
+        now = _now()
+        with self.transaction():
+            row = self._conn.execute(
+                """
+                SELECT goal_nodes.id FROM goal_nodes
+                JOIN goal_trees ON goal_trees.id = goal_nodes.tree_id
+                WHERE goal_nodes.id = ? AND goal_trees.owner_id = ?
+                """,
+                (node_id, owner_id),
+            ).fetchone()
+            if row is None:
+                return None
+            self._conn.execute(
+                """
+                UPDATE goal_nodes
+                SET title = ?, description = ?, standard_refs = ?, verify_criteria = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    title, description,
+                    json.dumps(standard_refs, ensure_ascii=False), verify_criteria, now, node_id,
+                ),
+            )
+            self._conn.execute(
+                "UPDATE goal_trees SET updated_at = ? WHERE id = (SELECT tree_id FROM goal_nodes WHERE id = ?)",
+                (now, node_id),
+            )
+        return self._goal_node_by_id(node_id)
+
+    def delete_goal_node(self, node_id: str, owner_id: str) -> None:
+        with self.transaction():
+            row = self._conn.execute(
+                """
+                SELECT goal_nodes.id, goal_nodes.tree_id FROM goal_nodes
+                JOIN goal_trees ON goal_trees.id = goal_nodes.tree_id
+                WHERE goal_nodes.id = ? AND goal_trees.owner_id = ?
+                """,
+                (node_id, owner_id),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError("goal node not found")
+            child = self._conn.execute(
+                "SELECT id FROM goal_nodes WHERE parent_id = ? LIMIT 1", (node_id,)
+            ).fetchone()
+            if child is not None:
+                raise ConflictError("goal node still has children")
+            self._conn.execute("DELETE FROM goal_nodes WHERE id = ?", (node_id,))
+            self._conn.execute(
+                "UPDATE goal_trees SET updated_at = ? WHERE id = ?", (_now(), row["tree_id"])
+            )
+
+    def reorder_goal_node(self, node_id: str, owner_id: str, direction: str) -> None:
+        if direction not in ("up", "down"):
+            raise InputError("invalid direction")
+        with self.transaction():
+            row = self._conn.execute(
+                """
+                SELECT goal_nodes.* FROM goal_nodes
+                JOIN goal_trees ON goal_trees.id = goal_nodes.tree_id
+                WHERE goal_nodes.id = ? AND goal_trees.owner_id = ?
+                """,
+                (node_id, owner_id),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError("goal node not found")
+            if row["parent_id"] is None:
+                sibling_where = "tree_id = ? AND parent_id IS NULL AND level = ?"
+                sibling_params: tuple = (row["tree_id"], row["level"])
+            else:
+                sibling_where = "parent_id = ?"
+                sibling_params = (row["parent_id"],)
+            cmp_op = "<" if direction == "up" else ">"
+            order = "DESC" if direction == "up" else "ASC"
+            neighbor = self._conn.execute(
+                f"""
+                SELECT id, sort_order FROM goal_nodes
+                WHERE {sibling_where} AND sort_order {cmp_op} ?
+                ORDER BY sort_order {order}, created_at {order}, id {order}
+                LIMIT 1
+                """,
+                sibling_params + (row["sort_order"],),
+            ).fetchone()
+            if neighbor is None:
+                return  # 已在边界，静默成功
+            now = _now()
+            self._conn.execute(
+                "UPDATE goal_nodes SET sort_order = ? WHERE id = ?", (neighbor["sort_order"], node_id)
+            )
+            self._conn.execute(
+                "UPDATE goal_nodes SET sort_order = ? WHERE id = ?", (row["sort_order"], neighbor["id"])
+            )
+            self._conn.execute(
+                "UPDATE goal_trees SET updated_at = ? WHERE id = ?", (now, row["tree_id"])
+            )
+
+    def _goal_node_by_id(self, node_id: str) -> GoalNode | None:
+        row = self._conn.execute("SELECT * FROM goal_nodes WHERE id = ?", (node_id,)).fetchone()
+        return _goal_node(row) if row else None
+
     @contextmanager
     def transaction(self):
         with self._lock:
@@ -504,6 +768,29 @@ class SqliteRepository:
               created_at TEXT NOT NULL,
               PRIMARY KEY (artifact_id, version)
             );
+            CREATE TABLE IF NOT EXISTS goal_trees (
+              id TEXT PRIMARY KEY,
+              owner_id TEXT NOT NULL,
+              subject TEXT NOT NULL,
+              grade INTEGER NOT NULL,
+              term TEXT NOT NULL,
+              title TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS goal_nodes (
+              id TEXT PRIMARY KEY,
+              tree_id TEXT NOT NULL,
+              parent_id TEXT,
+              level TEXT NOT NULL,
+              title TEXT NOT NULL,
+              description TEXT NOT NULL,
+              standard_refs TEXT NOT NULL,
+              verify_criteria TEXT NOT NULL,
+              sort_order INTEGER NOT NULL,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
             """
         )
 
@@ -572,3 +859,32 @@ def _conversation_title(content: str | None) -> str:
     if len(chars) <= 18:
         return line
     return "".join(chars[:18]) + "…"
+
+
+def _goal_tree(row: sqlite3.Row) -> GoalTree:
+    return GoalTree(
+        id=row["id"],
+        owner_id=row["owner_id"],
+        subject=row["subject"],
+        grade=row["grade"],
+        term=row["term"],
+        title=row["title"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _goal_node(row: sqlite3.Row) -> GoalNode:
+    return GoalNode(
+        id=row["id"],
+        tree_id=row["tree_id"],
+        parent_id=row["parent_id"],
+        level=row["level"],
+        title=row["title"],
+        description=row["description"],
+        standard_refs=json.loads(row["standard_refs"]),
+        verify_criteria=row["verify_criteria"],
+        sort_order=row["sort_order"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )

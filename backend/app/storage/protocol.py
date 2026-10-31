@@ -78,6 +78,36 @@ class ConversationSummary:
     created_at: str
 
 
+GOAL_LEVELS = {"semester", "unit", "lesson"}
+
+
+@dataclass
+class GoalTree:
+    id: str
+    owner_id: str
+    subject: str
+    grade: int
+    term: str
+    title: str
+    created_at: str
+    updated_at: str
+
+
+@dataclass
+class GoalNode:
+    id: str
+    tree_id: str
+    parent_id: str | None
+    level: str
+    title: str
+    description: str
+    standard_refs: list
+    verify_criteria: str
+    sort_order: int
+    created_at: str
+    updated_at: str
+
+
 class Repository(Protocol):
     def create_user(self, username: str, display_name: str, password_hash: str) -> User: ...
 
@@ -145,6 +175,46 @@ class Repository(Protocol):
     def get_version(self, artifact_id: str, version: int) -> VersionRecord | None: ...
 
     def artifact_view(self, artifact_id: str) -> dict | None: ...
+
+    def create_goal_tree(self, owner_id: str, subject: str, grade: int, term: str, title: str) -> GoalTree: ...
+
+    def list_goal_trees(
+        self, owner_id: str, subject: str | None = None, grade: int | None = None, term: str | None = None
+    ) -> list[GoalTree]: ...
+
+    def get_goal_tree_for_owner(self, tree_id: str, owner_id: str) -> GoalTree | None: ...
+
+    def rename_goal_tree(self, tree_id: str, owner_id: str, title: str) -> GoalTree | None: ...
+
+    def delete_goal_tree(self, tree_id: str, owner_id: str) -> bool: ...
+
+    def list_goal_nodes(self, tree_id: str, owner_id: str) -> list[GoalNode] | None: ...
+
+    def create_goal_node(
+        self,
+        tree_id: str,
+        owner_id: str,
+        parent_id: str | None,
+        level: str,
+        title: str,
+        description: str,
+        standard_refs: list,
+        verify_criteria: str,
+    ) -> GoalNode: ...
+
+    def update_goal_node(
+        self,
+        node_id: str,
+        owner_id: str,
+        title: str,
+        description: str,
+        standard_refs: list,
+        verify_criteria: str,
+    ) -> GoalNode | None: ...
+
+    def delete_goal_node(self, node_id: str, owner_id: str) -> None: ...
+
+    def reorder_goal_node(self, node_id: str, owner_id: str, direction: str) -> None: ...
 
     def transaction(self) -> Iterator[None]: ...
 
