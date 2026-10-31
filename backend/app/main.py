@@ -24,6 +24,7 @@ from app.api.goals import (
     node_view,
     parse_create_node,
     parse_create_tree,
+    parse_grade_filter,
     parse_reorder,
     parse_update_node,
     parse_update_tree,
@@ -331,13 +332,17 @@ def create_app(settings: Settings | None = None, complete=None, probe=None, env_
     def list_goal_trees(
         request: Request,
         subject: str | None = None,
-        grade: int | None = None,
+        grade: str | None = None,
         term: str | None = None,
     ):
         user, denied = require_user(request)
         if denied is not None:
             return denied
-        trees = repository.list_goal_trees(user.id, subject=subject, grade=grade, term=term)
+        try:
+            grade_filter = parse_grade_filter(grade)
+        except GoalRequestError as exc:
+            return JSONResponse(error_payload("invalid_input", exc.public_message), status_code=400)
+        trees = repository.list_goal_trees(user.id, subject=subject, grade=grade_filter, term=term)
         return {"trees": [tree_view(t) for t in trees]}
 
     @app.post("/api/goal-trees")

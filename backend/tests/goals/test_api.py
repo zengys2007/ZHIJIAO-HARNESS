@@ -1,6 +1,5 @@
 """目标树 API：鉴权、属主隔离、层级校验、模板预填。"""
 
-import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
@@ -55,6 +54,25 @@ def test_create_list_get_tree(tmp_path):
     assert detail.json()["nodes"] == []
 
 
+def test_list_trees_filters_by_grade(tmp_path):
+    client = _client(tmp_path)
+    _register(client)
+    tree = _create_tree(client).json()
+    _create_tree(client, grade=8, title="八上数学")
+
+    listed = client.get("/api/goal-trees", params={"grade": 7}).json()["trees"]
+    assert [t["tree_id"] for t in listed] == [tree["tree_id"]]
+
+
+def test_list_trees_rejects_bad_grade_filter(tmp_path):
+    client = _client(tmp_path)
+    _register(client)
+    for bad in ("abc", ""):
+        response = client.get("/api/goal-trees", params={"grade": bad})
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "invalid_input"
+
+
 def test_create_tree_rejects_bad_dimensions(tmp_path):
     client = _client(tmp_path)
     _register(client)
@@ -90,6 +108,25 @@ def test_owner_isolation_returns_404(tmp_path):
         ).status_code
         == 404
     )
+
+
+def test_node_owner_isolation_returns_404(tmp_path):
+    client = _client(tmp_path)
+    _register(client, "teacher-a")
+    tree = _create_tree(client).json()
+    node = client.post(
+        f"/api/goal-trees/{tree['tree_id']}/nodes",
+        json={"parent_id": None, "level": "unit", "title": "第一单元"},
+    ).json()
+    client.post("/api/auth/logout")
+
+    _register(client, "teacher-b")
+    patched = client.patch(f"/api/goal-nodes/{node['node_id']}", json={"title": "x"})
+    assert patched.status_code == 404
+    assert patched.json()["error"]["code"] == "not_found"
+    deleted = client.delete(f"/api/goal-nodes/{node['node_id']}")
+    assert deleted.status_code == 404
+    assert deleted.json()["error"]["code"] == "not_found"
 
 
 def test_node_crud_and_hierarchy_errors(tmp_path):

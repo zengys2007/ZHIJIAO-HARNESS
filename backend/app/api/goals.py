@@ -1,6 +1,6 @@
 """目标树的请求解析与响应组装。不引入 Web 框架。"""
 
-from app.goals.templates import SUBJECT_NAMES, semester_seed
+from app.goals.templates import SUBJECT_NAMES
 from app.storage.protocol import GoalNode, GoalTree
 
 GOAL_GRADES = (7, 8, 9)
@@ -94,6 +94,16 @@ def parse_reorder(body) -> str:
     if direction not in ("up", "down"):
         raise GoalRequestError("direction 需是 up 或 down。")
     return direction
+
+
+def parse_grade_filter(raw: str | None) -> int | None:
+    """列表接口的 grade 查询参数：None 不过滤，其余必须能安全转成整数。"""
+    if raw is None:
+        return None
+    try:
+        return int(raw.strip())
+    except ValueError:
+        raise GoalRequestError("年级必须是整数。")
 
 
 def _refs(body: dict) -> list[str]:
