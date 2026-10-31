@@ -1679,3 +1679,33 @@ button:focus-visible {
 .account-menu-item.is-danger:hover {
   background: #fbeeec;
 }
+
+/* ===== 目标管理 ===== */
+.goals { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: 16px; gap: 12px; }
+.goals-header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.goals-title { font-size: 16px; margin: 0; flex: 1; }
+.goals-banner { margin: 0; padding: 8px 12px; border-radius: 8px; background: #fdecea; color: #b3261e; }
+.goals-body { display: flex; gap: 16px; flex: 1; min-height: 0; }
+.goals-tree { flex: 1; overflow-y: auto; border: 1px solid #e3e8e5; border-radius: 10px; padding: 12px; }
+.goals-editor { flex: 1; overflow-y: auto; }
+.goals-group-label { margin: 8px 0 4px; font-size: 12px; color: #6b7770; }
+.goals-unit { margin: 4px 0 12px; }
+.goals-lessons { margin-left: 20px; }
+.goals-nodes { list-style: none; margin: 0; padding: 0; }
+.goals-node { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+.goals-node.is-selected .goals-node-title { outline: 2px solid #2f6f4f; }
+.goals-node-title { flex: 1; text-align: left; background: none; border: none; cursor: pointer; padding: 6px 8px; border-radius: 6px; display: flex; gap: 8px; align-items: center; }
+.goals-node-title:hover { background: #f0f4f2; }
+.goals-node-level { font-size: 11px; color: #6b7770; border: 1px solid #d7ded9; border-radius: 4px; padding: 0 4px; white-space: nowrap; }
+.goals-node-ops { display: flex; gap: 4px; }
+.goals-node-add { background: none; border: 1px dashed #b7c2bb; border-radius: 6px; color: #4a5a50; cursor: pointer; padding: 2px 10px; }
+.goals-form { display: flex; flex-direction: column; gap: 10px; max-width: 420px; }
+.goals-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: #3d4a42; }
+.goals-form input, .goals-form textarea, .goals-form select { font: inherit; padding: 6px 8px; border: 1px solid #c9d2cc; border-radius: 6px; }
+.goals-form-actions { display: flex; gap: 8px; }
+.goals-check { flex-direction: row !important; align-items: center; gap: 8px !important; }
+.goals-list ul { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.goals-tree-item { display: flex; align-items: center; gap: 12px; border: 1px solid #e3e8e5; border-radius: 8px; padding: 10px 12px; }
+.goals-tree-name { font-weight: 600; }
+.goals-tree-meta { color: #6b7770; font-size: 12px; flex: 1; }
+.goals-empty, .goals-hint { color: #6b7770; font-size: 13px; }
