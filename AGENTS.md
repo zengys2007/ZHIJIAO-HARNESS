@@ -34,6 +34,8 @@
 
 当前要做的是教师登录，从后续路线的阶段三提前。网页生成、讲义、课堂编排尚未开始。登录设计已确认，后端已实现注册、登录、退出和会话隔离。工作台尚未接上登录。顺序以 `docs/superpowers/specs/2026-10-21-later-roadmap.md` 第 0 节和 `docs/superpowers/specs/2026-10-22-login-design.md` 为准。
 
+2026-10-31 起并行推进「目标与计划管理」模块（用户明确要求），范围与批次以 `docs/superpowers/specs/2026-10-31-goals-plans-design.md` 为准；它不改动对话图与工具注册表。
+
 MVP 必须支持：
 - 创建会话并发送教师消息
 - 保存模型的文字回复

@@ -36,6 +36,7 @@ backend/
       errors.py                error.code / message / retryable 的唯一定义
       conversations.py         创建会话、发送消息、读取会话
       tasks.py                 GET /api/tasks/{task_id}
+      goals.py                  目标树的请求解析与响应组装
     tasks/
       states.py                pending / running / succeeded / failed 的唯一定义
       runner.py                改状态、调用 invoke、保存助手回复
@@ -57,6 +58,8 @@ backend/
     auth/
       passwords.py             scrypt 密码哈希
       sessions.py              登录 Cookie 的签发和校验
+    goals/
+      templates.py            初中 9 科课标骨架常量
     storage/
       protocol.py              存储方法。调用方不写 SQL
       repository.py            SQLite。会话、任务、用户和登录会话
@@ -90,6 +93,8 @@ frontend/
   index.html            Vite 入口
   src/
     api/                只调用本机 /api。类型与后端契约一致
+    types/goals.ts       目标树类型（与后端 tree_view/node_view 一致）
+    pages/GoalsView.tsx  目标管理视图
     types/              引用任务四态，不另造一套状态
     pages/              会话、输入、轮询、显示回复
     components/         对话记录和输入区
