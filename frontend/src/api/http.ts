@@ -9,7 +9,7 @@ import type {
   TaskStatus,
 } from "../types/api";
 
-const ID = /^[0-9a-f]{32}$/;
+export const ID = /^[0-9a-f]{32}$/;
 const STATUSES = new Set<TaskStatus>(["pending", "running", "succeeded", "failed"]);
 
 export class ApiRequestError extends Error {
@@ -111,7 +111,7 @@ function readPublicLlm(value: unknown): LlmPublic {
   };
 }
 
-async function request(path: string, init?: RequestInit): Promise<unknown> {
+export async function request(path: string, init?: RequestInit): Promise<unknown> {
   let response: Response;
   try {
     response = await fetch(path, {
