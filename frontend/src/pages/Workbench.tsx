@@ -28,6 +28,12 @@ import {
 import type { SessionSummary } from "../lib/sessions";
 import { CONTENT_LIMIT, codePointLength, conversationTitle } from "../lib/text";
 import type { ApprovalMode, AuthResult, AuthUser, ConversationApi, ConversationMessage, TaskSnapshot } from "../types/api";
+
+const PREVIEW_USER: AuthUser = {
+  user_id: "00000000000000000000000000000000",
+  username: "preview",
+  display_name: "界面预览",
+};
 import { AccountSwitcher } from "../components/AccountSwitcher";
 import { ApprovalBar } from "../components/ApprovalBar";
 import { AttachmentBar } from "../components/AttachmentBar";
@@ -156,15 +162,23 @@ function WorkbenchScreen({
       }
     } catch (error) {
       if (!authAliveRef.current) return;
-      // 网络/5xx：留在 undefined（确认中），不视为未登录
+      if (error instanceof DisconnectError) {
+        enterOfflinePreview();
+        return;
+      }
       if (error instanceof ApiRequestError && error.status >= 500) {
         setBanner(t("systemError"));
-        // 仍然将 user 置为 null 让界面有重试入口
         setUser(null);
       } else {
         setUser(null);
       }
     }
+  }
+
+  function enterOfflinePreview() {
+    setPreview(true);
+    setUser(PREVIEW_USER);
+    setBanner(null);
   }
 
   async function refreshSessionList() {
@@ -244,7 +258,7 @@ function WorkbenchScreen({
   }
 
   async function doLogout() {
-    if (logoutBusy) return;
+    if (preview || logoutBusy) return;
     setLogoutBusy(true);
     try {
       await logoutFn();
@@ -256,6 +270,7 @@ function WorkbenchScreen({
 
   /** 切换账号：结束当前会话，进入账号切换面板（列出本机登录过的账号和添加新账号） */
   async function doSwitchAccount() {
+    if (preview) return;
     setAuthScreen("switch");
     await doLogout();
   }

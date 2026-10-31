@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AuthUser, ConversationApi, ConversationMessage, TaskSnapshot } from "../types/api";
-import { ApiRequestError, type ProbeRequest } from "../api/http";
+import { ApiRequestError, DisconnectError, type ProbeRequest } from "../api/http";
 import { Workbench } from "./Workbench";
 
 const conversationId = "0123456789abcdef0123456789abcdef";
@@ -501,6 +501,30 @@ describe("工作台", () => {
     expect(await screen.findByRole("heading", { name: "登录" })).toBeTruthy();
     expect(screen.getByRole("textbox", { name: "用户名" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "去注册" })).toBeTruthy();
+  });
+
+  it("连不上后端时进入界面预览，发送后看到本地回复", async () => {
+    const user = userEvent.setup();
+    render(
+      <Workbench
+        getCurrentUser={async () => {
+          throw new DisconnectError();
+        }}
+        listConversationsAuth={async () => {
+          throw new Error("不应请求会话列表");
+        }}
+      />,
+    );
+
+    expect(await screen.findByText("本机服务未连接，当前只预览界面。")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "登录" })).toBeNull();
+
+    await user.type(screen.getByRole("textbox", { name: "消息" }), "今天讲什么");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    expect(
+      await screen.findByText("本机服务还没接上。这是界面预览，正式回复会出现在这里。"),
+    ).toBeTruthy();
   });
 });
 

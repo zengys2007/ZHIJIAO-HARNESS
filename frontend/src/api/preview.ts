@@ -158,34 +158,32 @@ export function createPreviewApi(now: () => string = timestamp): ConversationApi
       const existingAssistant = thread.messages.find(
         (m) => m.task_id === taskId && m.role === "assistant",
       );
-      // 模拟：第一次 poll 还在 running，第二次 poll 如果 approvals 未设置则决定是否带工具调用
       const hasAssistant = existingAssistant !== undefined;
       if (!hasAssistant && user) {
-        // 决定是否带工具调用：根据内容里是否含"点名/计时/投票"等关键词，或者随机
+        // 点名、计时、投票这几个词会带出待审批的工具；其余消息只回预览文字
         const keywords = /点名|roll.?call|随机|计时|timer|投票|poll/i;
-        const withTools = keywords.test(user.content) || Math.random() < 0.4;
+        const withTools = keywords.test(user.content);
         const { text, approvals: newApprovals } = composeReply(user.content, withTools);
         thread.approvals[taskId] = newApprovals;
         thread.messages.push(buildAssistantMessage(taskId, text, newApprovals));
       }
-      // 计算 step_count 和状态
+      const assistant = thread.messages.find((m) => m.task_id === taskId && m.role === "assistant");
       const finalApprovalStatuses = (thread.approvals[taskId] ?? []).map((a) => a.approval_status);
       const hasPending = finalApprovalStatuses.some((s) => s === "pending" || s === "running");
       let status: TaskSnapshot["status"] = "succeeded";
-      let reply: string | null = null;
-      let stepCount = 1;
-      let lastEventType: string | null = "assistant_message";
-      if (!hasAssistant) {
+      let reply: string | null = assistant?.content ?? null;
+      let stepCount = assistant ? 1 : 0;
+      let lastEventType: string | null = assistant ? "assistant_message" : null;
+      if (!assistant) {
         status = "running";
-      } else {
-        if (hasPending) {
-          status = "running";
-          lastEventType = "tool_call_proposed";
-        } else {
-          reply = existingAssistant.content;
-          stepCount = 1 + finalApprovalStatuses.filter((s) => s === "succeeded" || s === "failed").length;
-          lastEventType = "tool_result";
-        }
+        reply = null;
+      } else if (hasPending) {
+        status = "running";
+        reply = null;
+        lastEventType = "tool_call_proposed";
+      } else if (finalApprovalStatuses.length > 0) {
+        stepCount = 1 + finalApprovalStatuses.filter((s) => s === "succeeded" || s === "failed").length;
+        lastEventType = "tool_result";
       }
       return {
         task_id: taskId,
