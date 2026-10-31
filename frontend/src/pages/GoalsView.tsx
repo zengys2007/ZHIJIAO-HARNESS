@@ -16,6 +16,8 @@ type Draft = {
   title: string;
   description: string;
   verifyCriteria: string;
+  /** 暂无编辑 UI，编辑时原样透传，避免把已有课标引用清空。 */
+  standardRefs: string[];
 };
 
 const LEVEL_LABELS: Record<GoalNode["level"], string> = {
@@ -99,13 +101,14 @@ export function GoalsView({ api, onBack }: Props) {
     setDraft({
       nodeId: node.node_id, parentId: node.parent_id, level: node.level,
       title: node.title, description: node.description, verifyCriteria: node.verify_criteria,
+      standardRefs: node.standard_refs,
     });
   }
 
   function startCreateChild(parent: GoalNode | null, level: Draft["level"]) {
     setDraft({
       nodeId: null, parentId: parent ? parent.node_id : null, level,
-      title: "", description: "", verifyCriteria: "",
+      title: "", description: "", verifyCriteria: "", standardRefs: [],
     });
   }
 
@@ -119,13 +122,13 @@ export function GoalsView({ api, onBack }: Props) {
     try {
       const payload = {
         title: draft.title.trim(), description: draft.description.trim(),
-        verify_criteria: draft.verifyCriteria.trim(), standard_refs: [],
+        verify_criteria: draft.verifyCriteria.trim(), standard_refs: draft.standardRefs,
       };
       if (draft.nodeId === null) {
         await api.createGoalNode(detail.tree.tree_id, {
           parent_id: draft.parentId, level: draft.level,
           title: payload.title, description: payload.description,
-          verify_criteria: payload.verify_criteria, standard_refs: [],
+          verify_criteria: payload.verify_criteria, standard_refs: payload.standard_refs,
         });
       } else {
         await api.updateGoalNode(draft.nodeId, payload);

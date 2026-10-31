@@ -17,7 +17,7 @@ const SEMESTER: GoalNode = {
 
 const UNIT: GoalNode = {
   node_id: "c".repeat(32), tree_id: TREE.tree_id, parent_id: null, level: "unit",
-  title: "第一单元 有理数", description: "", standard_refs: [], verify_criteria: "",
+  title: "第一单元 有理数", description: "", standard_refs: ["数与代数"], verify_criteria: "",
   sort_order: 2, created_at: "t1", updated_at: "t1",
 };
 
@@ -68,7 +68,7 @@ describe("GoalsView", () => {
     await userEvent.type(title, "第一单元（改）");
     await userEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(updateGoalNode).toHaveBeenCalledWith(UNIT.node_id, {
-      title: "第一单元（改）", description: "", verify_criteria: "", standard_refs: [],
+      title: "第一单元（改）", description: "", verify_criteria: "", standard_refs: ["数与代数"],
     }));
   });
 
