@@ -9,6 +9,8 @@ type Props = {
   onPickFile: () => void;
   /** 打开设置里的模型/API 连接页 */
   onOpenModel: () => void;
+  /** 打开目标管理视图 */
+  onOpenGoals: () => void;
   /** 点击未实现的功能项时触发 */
   onUnavailable: () => void;
 };
@@ -31,6 +33,7 @@ export function PlusMenu({
   onApprovalModeChange,
   onPickFile,
   onOpenModel,
+  onOpenGoals,
   onUnavailable,
 }: Props) {
   const { locale, t } = useAppearance();
@@ -90,6 +93,11 @@ export function PlusMenu({
     }
     if (item.kind === "model") {
       onOpenModel();
+      setOpen(false);
+      return;
+    }
+    if (item.key === "goal") {
+      onOpenGoals();
       setOpen(false);
       return;
     }

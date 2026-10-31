@@ -15,6 +15,7 @@ import {
   type ProbeRequest,
 } from "../api/http";
 import { previewApi } from "../api/preview";
+import { defaultGoalsApi } from "../api/goals";
 import { loadRememberedAccounts, rememberAccount, type RememberedAccount } from "../lib/accounts";
 import { AppearanceProvider, useAppearance } from "../lib/appearance";
 import {
@@ -28,6 +29,7 @@ import {
 import type { SessionSummary } from "../lib/sessions";
 import { CONTENT_LIMIT, codePointLength, conversationTitle } from "../lib/text";
 import type { ApprovalMode, AuthResult, AuthUser, ConversationApi, ConversationMessage, TaskSnapshot } from "../types/api";
+import type { GoalsApi } from "../types/goals";
 
 const PREVIEW_USER: AuthUser = {
   user_id: "00000000000000000000000000000000",
@@ -39,6 +41,7 @@ import { ApprovalBar } from "../components/ApprovalBar";
 import { AttachmentBar } from "../components/AttachmentBar";
 import { AuthForm } from "../components/AuthForm";
 import { Composer } from "../components/Composer";
+import { GoalsView } from "./GoalsView";
 import { PlusMenu } from "../components/PlusMenu";
 import { Settings, type SettingsSection } from "../components/Settings";
 import { Sidebar } from "../components/Sidebar";
@@ -62,6 +65,8 @@ type Props = {
   resumeFn?: (rememberToken: string) => Promise<AuthUser | AuthResult>;
   /** 测试注入：退出 */
   logoutFn?: () => Promise<void>;
+  /** 测试注入：目标管理 API。默认走后端 */
+  goalsApi?: GoalsApi;
 };
 
 function readSession(value: AuthUser | AuthResult): AuthResult {
@@ -95,6 +100,7 @@ function WorkbenchScreen({
   registerFn = httpRegister,
   resumeFn = httpResume,
   logoutFn = httpLogout,
+  goalsApi = defaultGoalsApi,
 }: Props) {
   const { t } = useAppearance();
   // ===== Auth 状态 =====
@@ -118,7 +124,7 @@ function WorkbenchScreen({
   const [submitting, setSubmitting] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
   const [preview, setPreview] = useState(false);
-  const [view, setView] = useState<"chat" | "settings">("chat");
+  const [view, setView] = useState<"chat" | "settings" | "goals">("chat");
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("user");
   /** 审批模式：手动 / 自动 */
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>("manual");
@@ -602,7 +608,9 @@ function WorkbenchScreen({
         user={user}
       />
       <main className="main">
-        {view === "settings" ? (
+        {view === "goals" ? (
+          <GoalsView api={goalsApi} onBack={() => setView("chat")} />
+        ) : view === "settings" ? (
           authenticated ? (
             <Settings
               section={settingsSection}
@@ -684,6 +692,7 @@ function WorkbenchScreen({
                     setSettingsSection("connections");
                     setView("settings");
                   }}
+                  onOpenGoals={() => setView("goals")}
                   onUnavailable={() => showToast(t("unavailable"))}
                 />
               }

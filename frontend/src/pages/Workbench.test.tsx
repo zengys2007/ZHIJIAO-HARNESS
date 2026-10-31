@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AuthUser, ConversationApi, ConversationMessage, TaskSnapshot } from "../types/api";
+import type { GoalsApi } from "../types/goals";
 import { ApiRequestError, DisconnectError, type ProbeRequest } from "../api/http";
 import { Workbench } from "./Workbench";
 
@@ -23,6 +24,7 @@ afterEach(() => {
 /** 已登录的 Workbench 渲染辅助 */
 function renderLoggedIn(opts: {
   api?: ConversationApi;
+  goalsApi?: GoalsApi;
   loadSources?: () => Promise<{ environment: { base_url: string; model: string; has_api_key: boolean }; dotenv: { base_url: string; model: string; has_api_key: boolean } }>;
   probe?: (body: ProbeRequest, signal?: AbortSignal) => Promise<{ reachable: boolean }>;
   logout?: () => Promise<void>;
@@ -31,6 +33,7 @@ function renderLoggedIn(opts: {
   return render(
     <Workbench
       api={opts.api ?? immediateApi()}
+      goalsApi={opts.goalsApi}
       loadSources={opts.loadSources}
       probe={opts.probe}
       getCurrentUser={noopUser}
@@ -254,7 +257,7 @@ describe("工作台", () => {
     await screen.findByRole("button", { name: "发送" });
 
     await user.click(screen.getByRole("button", { name: "更多操作" }));
-    await user.click(screen.getByRole("menuitem", { name: /目标/ }));
+    await user.click(screen.getByRole("menuitem", { name: /反馈/ }));
 
     // 菜单关闭，出现 toast
     expect(screen.queryByRole("menu")).toBeNull();
@@ -525,6 +528,39 @@ describe("工作台", () => {
     expect(
       await screen.findByText("本机服务还没接上。这是界面预览，正式回复会出现在这里。"),
     ).toBeTruthy();
+  });
+
+  it("点「＋」菜单的「目标」进入目标管理视图", async () => {
+    const user = userEvent.setup();
+    const goalsApi: GoalsApi = {
+      listGoalTrees: async () => [],
+      createGoalTree: async () => {
+        throw new Error("不应调用");
+      },
+      getGoalTree: async () => {
+        throw new Error("不应调用");
+      },
+      renameGoalTree: async () => {
+        throw new Error("不应调用");
+      },
+      deleteGoalTree: async () => {},
+      createGoalNode: async () => {
+        throw new Error("不应调用");
+      },
+      updateGoalNode: async () => {
+        throw new Error("不应调用");
+      },
+      deleteGoalNode: async () => {},
+      reorderGoalNode: async () => {},
+    };
+    renderLoggedIn({ goalsApi });
+    await screen.findByRole("button", { name: "发送" });
+
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    await user.click(screen.getByRole("menuitem", { name: /目标/ }));
+    expect(await screen.findByRole("region", { name: "目标管理" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "返回对话" }));
+    expect(screen.queryByRole("region", { name: "目标管理" })).toBeNull();
   });
 });
 
