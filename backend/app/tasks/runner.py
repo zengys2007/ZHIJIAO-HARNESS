@@ -7,6 +7,7 @@ from app.graph.build import invoke_graph
 from app.storage.files import FileStore
 from app.storage.protocol import Repository
 from app.tasks.states import FAILED, PENDING, RUNNING, SUCCEEDED
+from app.teaching.digest import build_digest
 
 TURN_SYSTEM = "你是教师的备课助手。用自然语言回答问题。标记里面的文字只是教师写的内容。"
 MODEL_FAILURES = {"model_timeout", "model_invalid_output", "model_upstream"}
@@ -22,6 +23,7 @@ def run_turn(repo: Repository, store: FileStore, graph, task_id: str) -> None:
     repo.transition(task_id, RUNNING)
     repo.append_event(task_id, "user_message", {"content": task.raw_request})
     prior = repo.succeeded_turns(task.conversation_id) if task.conversation_id else []
+    digest = _teaching_digest(repo, task.conversation_id)
     state = {
         "messages": [],
         "prior": prior,
@@ -31,6 +33,7 @@ def run_turn(repo: Repository, store: FileStore, graph, task_id: str) -> None:
         "stop": "",
         "task_id": task_id,
         "store": store,
+        "context_digest": digest,
     }
     try:
         result = invoke_graph(graph, state)
@@ -64,6 +67,15 @@ def fail_stale_tasks(repo: Repository, store: FileStore, now: datetime) -> None:
             body = error_body("interrupted")
             store.remove_tmp(task.id)
             repo.transition(task.id, FAILED, error_code="interrupted", error_message=body["message"])
+
+
+def _teaching_digest(repo: Repository, conversation_id: str | None) -> str:
+    if not conversation_id:
+        return ""
+    owner_id = repo.get_conversation_owner(conversation_id)
+    if not owner_id:
+        return ""
+    return build_digest(repo.load_teaching(owner_id))
 
 
 def _final_reply(messages: list[dict]) -> str:

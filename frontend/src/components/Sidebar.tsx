@@ -12,6 +12,9 @@ type SidebarProps = {
   settingsOpen: boolean;
   settingsSection: SettingsSection;
   onSettingsSection: (section: SettingsSection) => void;
+  /** 备课与学情视图是否打开 */
+  teachingOpen: boolean;
+  onOpenTeaching: () => void;
   onNew: () => void;
   onSelect: (id: string) => void;
   onOpenSettings: () => void;
@@ -32,6 +35,8 @@ export function Sidebar({
   settingsOpen,
   settingsSection,
   onSettingsSection,
+  teachingOpen,
+  onOpenTeaching,
   onNew,
   onSelect,
   onOpenSettings,
@@ -75,6 +80,8 @@ export function Sidebar({
           busy={busy}
           preview={preview}
           loggedIn={loggedIn}
+          teachingOpen={teachingOpen}
+          onOpenTeaching={onOpenTeaching}
           onNew={onNew}
           onSelect={onSelect}
         />
@@ -155,6 +162,8 @@ function ChatNav({
   busy,
   preview,
   loggedIn,
+  teachingOpen,
+  onOpenTeaching,
   onNew,
   onSelect,
 }: {
@@ -163,6 +172,8 @@ function ChatNav({
   busy: boolean;
   preview: boolean;
   loggedIn: boolean;
+  teachingOpen: boolean;
+  onOpenTeaching: () => void;
   onNew: () => void;
   onSelect: (id: string) => void;
 }) {
@@ -177,6 +188,15 @@ function ChatNav({
       </div>
       <button className="new-chat" type="button" onClick={onNew} disabled={busy || !loggedIn}>
         {t("newChat")}
+      </button>
+      <button
+        className="new-chat side-teaching"
+        type="button"
+        aria-current={teachingOpen ? "page" : undefined}
+        onClick={onOpenTeaching}
+        disabled={busy || !loggedIn}
+      >
+        备课与学情
       </button>
       {!loggedIn && !preview ? (
         <p className="preview-note">{t("signInFirst")}</p>

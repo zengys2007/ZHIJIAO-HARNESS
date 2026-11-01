@@ -45,6 +45,7 @@ import { GoalsView } from "./GoalsView";
 import { PlusMenu } from "../components/PlusMenu";
 import { Settings, type SettingsSection } from "../components/Settings";
 import { Sidebar } from "../components/Sidebar";
+import { TeachingPanel } from "../components/TeachingPanel";
 import { Transcript } from "../components/Transcript";
 
 const EMPTY_MESSAGES: ConversationMessage[] = [];
@@ -124,7 +125,7 @@ function WorkbenchScreen({
   const [submitting, setSubmitting] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
   const [preview, setPreview] = useState(false);
-  const [view, setView] = useState<"chat" | "settings" | "goals">("chat");
+  const [view, setView] = useState<"chat" | "settings" | "goals" | "teaching">("chat");
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("user");
   /** 审批模式：手动 / 自动 */
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>("manual");
@@ -523,6 +524,13 @@ function WorkbenchScreen({
     setBanner(null);
   }
 
+  /** 一键任务草稿回填：切回对话并放进输入框，教师可微调后发送 */
+  function handleTeachingDraft(draft: string) {
+    setView("chat");
+    setDraft(draft);
+    setBanner(null);
+  }
+
   function handleSelect(id: string) {
     setView("chat");
     if (busyRef.current || id === activeId) return;
@@ -593,6 +601,8 @@ function WorkbenchScreen({
         settingsOpen={view === "settings"}
         settingsSection={settingsSection}
         onSettingsSection={setSettingsSection}
+        teachingOpen={view === "teaching"}
+        onOpenTeaching={() => setView("teaching")}
         onNew={handleNew}
         onSelect={handleSelect}
         onOpenSettings={() => setView("settings")}
@@ -621,6 +631,14 @@ function WorkbenchScreen({
             />
           ) : (
             <Settings section={settingsSection} probe={probe} loadSources={loadSources} authenticated={false} />
+          )
+        ) : view === "teaching" ? (
+          user === undefined ? (
+            <AuthLoading />
+          ) : user === null ? (
+            <AuthForm onLogin={doLogin} onRegister={doRegister} />
+          ) : (
+            <TeachingPanel onDraft={handleTeachingDraft} />
           )
         ) : user === undefined ? (
           <AuthLoading />

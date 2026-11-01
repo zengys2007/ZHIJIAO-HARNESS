@@ -15,3 +15,4 @@ class GraphState(TypedDict):
     stop: str
     task_id: str
     store: FileStore
+    context_digest: str

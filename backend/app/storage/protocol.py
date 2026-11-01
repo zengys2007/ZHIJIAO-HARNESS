@@ -108,6 +108,86 @@ class GoalNode:
     updated_at: str
 
 
+@dataclass
+class TeachingClass:
+    id: str
+    owner_id: str
+    name: str
+    created_at: str
+
+
+@dataclass
+class StudentRecord:
+    id: str
+    class_id: str
+    name: str
+
+
+@dataclass
+class KnowledgePoint:
+    id: str
+    owner_id: str
+    name: str
+    description: str
+    prerequisites: list
+
+
+@dataclass
+class Assignment:
+    id: str
+    owner_id: str
+    class_id: str
+    title: str
+    kind: str
+    created_at: str
+
+
+@dataclass
+class ScoreCell:
+    assignment_id: str
+    student_name: str
+    knowledge_point_id: str
+    knowledge_point_name: str
+    score: float
+
+
+@dataclass
+class TeachingDocument:
+    id: str
+    owner_id: str
+    doc_type: str
+    title: str
+    content: str
+    created_at: str
+
+
+@dataclass
+class TeachingData:
+    """一位教师的全部教学上下文，供洞察计算和模型摘要使用。"""
+
+    classes: list[TeachingClass]
+    students: list[StudentRecord]
+    knowledge_points: list[KnowledgePoint]
+    assignments: list[Assignment]
+    scores: list[ScoreCell]
+    documents: list[TeachingDocument]
+
+
+EMPTY_TEACHING = TeachingData(
+    classes=[], students=[], knowledge_points=[], assignments=[], scores=[], documents=[]
+)
+
+
+@dataclass
+class AssignmentInput:
+    """一次作业/测验的成绩录入：学生名 -> [(知识点名, 得分)]。"""
+
+    class_id: str
+    title: str
+    kind: str
+    records: list
+
+
 class Repository(Protocol):
     def create_user(self, username: str, display_name: str, password_hash: str) -> User: ...
 
@@ -219,3 +299,17 @@ class Repository(Protocol):
     def transaction(self) -> Iterator[None]: ...
 
     def create_task(self, raw_request: str, preset_hint: str | None) -> Task: ...
+
+    def create_class(self, owner_id: str, name: str, student_names: list[str]) -> str: ...
+
+    def create_knowledge_point(
+        self, owner_id: str, name: str, description: str, prerequisites: list[str]
+    ) -> str: ...
+
+    def create_assignment(self, owner_id: str, assignment: AssignmentInput) -> str: ...
+
+    def create_document(self, owner_id: str, doc_type: str, title: str, content: str) -> str: ...
+
+    def load_teaching(self, owner_id: str) -> TeachingData: ...
+
+    def get_conversation_owner(self, conversation_id: str) -> str | None: ...

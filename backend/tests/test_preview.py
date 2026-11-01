@@ -36,7 +36,8 @@ def test_published_preview_is_isolated_from_the_workbench(tmp_path):
     assert preview.headers["x-content-type-options"] == "nosniff"
     assert preview.headers["content-type"].startswith("text/html")
     assert "课堂页面" in preview.text
-    assert "发送" in shell.text
+    # 工作台是 React SPA 壳：静态 HTML 只有挂载点，没有预览内容，也没有旧静态版的「发送」按钮文案
+    assert '<div id="root">' in shell.text
     assert "课堂页面" not in shell.text
     assert "allow-same-origin" not in shell.text
     assert missing.status_code == 404

@@ -7,6 +7,9 @@ import type {
   ConversationSummary,
   TaskSnapshot,
   TaskStatus,
+  TeachingApi,
+  TeachingInsights,
+  TeachingOverview,
 } from "../types/api";
 
 export const ID = /^[0-9a-f]{32}$/;
@@ -219,6 +222,137 @@ function readAuthResult(body: unknown): AuthResult {
     user,
     remember_token: typeof token === "string" && token.length > 0 ? token : null,
   };
+}
+
+// ===== 教学上下文 =====
+
+export const teachingApi: TeachingApi = {
+  loadOverview: async () => readOverview(await request("/api/teaching/overview")),
+  loadInsights: async () => readInsights(await request("/api/teaching/insights")),
+  createClass: async (name, students) => {
+    const body = await request("/api/teaching/classes", {
+      method: "POST",
+      body: JSON.stringify({ name, students }),
+    });
+    return { class_id: readId(body, "class_id") };
+  },
+  createPoint: async (name, description, prerequisites) => {
+    const body = await request("/api/teaching/points", {
+      method: "POST",
+      body: JSON.stringify({ name, description, prerequisites }),
+    });
+    return { point_id: readId(body, "point_id") };
+  },
+  createAssignment: async (classId, title, kind, records) => {
+    const body = await request("/api/teaching/assignments", {
+      method: "POST",
+      body: JSON.stringify({ class_id: classId, title, kind, records }),
+    });
+    return { assignment_id: readId(body, "assignment_id") };
+  },
+  createDocument: async (docType, title, content) => {
+    const body = await request("/api/teaching/documents", {
+      method: "POST",
+      body: JSON.stringify({ doc_type: docType, title, content }),
+    });
+    return { document_id: readId(body, "document_id") };
+  },
+};
+
+function readOverview(body: unknown): TeachingOverview {
+  const record = recordOf(body);
+  return {
+    classes: readList(record.classes, (r) => ({
+      class_id: readId(r, "class_id"),
+      name: readText(r.name),
+      created_at: readText(r.created_at),
+      students: Array.isArray(r.students) ? r.students.filter((s): s is string => typeof s === "string") : [],
+    })),
+    knowledge_points: readList(record.knowledge_points, (r) => ({
+      point_id: readId(r, "point_id"),
+      name: readText(r.name),
+      description: readText(r.description),
+      prerequisites: Array.isArray(r.prerequisites)
+        ? r.prerequisites.filter((p): p is string => typeof p === "string")
+        : [],
+    })),
+    assignments: readList(record.assignments, (r) => ({
+      assignment_id: readId(r, "assignment_id"),
+      class_id: readId(r, "class_id"),
+      title: readText(r.title),
+      kind: readText(r.kind),
+      created_at: readText(r.created_at),
+    })),
+    documents: readList(record.documents, (r) => ({
+      document_id: readId(r, "document_id"),
+      doc_type: readText(r.doc_type),
+      title: readText(r.title),
+      created_at: readText(r.created_at),
+    })),
+  };
+}
+
+function readInsights(body: unknown): TeachingInsights {
+  const record = recordOf(body);
+  return {
+    classes: readList(record.classes, (r) => {
+      const latest = r.latest && typeof r.latest === "object" ? (r.latest as Record<string, unknown>) : null;
+      return {
+        class_id: readId(r, "class_id"),
+        class_name: readText(r.class_name),
+        student_count: typeof r.student_count === "number" ? r.student_count : 0,
+        recent_assignments: readList(r.recent_assignments, (a) => ({
+          id: readId(a, "id"),
+          title: readText(a.title),
+          kind: readText(a.kind),
+          created_at: readText(a.created_at),
+        })),
+        latest: latest
+          ? {
+              id: readId(latest, "id"),
+              title: readText(latest.title),
+              kind: readText(latest.kind),
+              created_at: readText(latest.created_at),
+            }
+          : null,
+        knowledge_points: readList(r.knowledge_points, (p) => ({
+          name: readText(p.name),
+          latest_rate: readRate(p.latest_rate),
+          previous_rate: readRate(p.previous_rate),
+          recent_rate: readRate(p.recent_rate),
+          covered: typeof p.covered === "number" ? p.covered : 0,
+        })),
+        weak_points: readList(r.weak_points, (w) => ({
+          name: readText(w.name),
+          rate: readRate(w.rate) ?? 0,
+        })),
+        students: readList(r.students, (s) => ({
+          name: readText(s.name),
+          overall_rate: readRate(s.overall_rate),
+          by_point:
+            s.by_point && typeof s.by_point === "object"
+              ? Object.fromEntries(
+                  Object.entries(s.by_point as Record<string, unknown>).map(([k, v]) => [k, readRate(v) ?? 0]),
+                )
+              : {},
+          weak: Array.isArray(s.weak) ? s.weak.filter((w): w is string => typeof w === "string") : [],
+        })),
+      };
+    }),
+  };
+}
+
+function readList<T>(value: unknown, read: (item: Record<string, unknown>) => T): T[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => read(recordOf(item)));
+}
+
+function readText(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function readRate(value: unknown): number | null {
+  return typeof value === "number" ? value : null;
 }
 
 function readAuthUser(body: unknown): AuthUser {

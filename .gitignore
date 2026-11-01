@@ -1,5 +1,6 @@
 .env
 data/
+.workbuddy/
 backend/.venv/
 backend/*.egg-info/
 **/__pycache__/

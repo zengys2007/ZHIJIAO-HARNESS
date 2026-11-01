@@ -12,8 +12,11 @@ def assemble_model_input(
     prior_turns: list[tuple[str, str]],
     current_user: str,
     turn_messages: list[dict],
+    context_digest: str = "",
 ) -> list[dict]:
     messages: list[dict] = [{"role": "system", "content": system}]
+    if context_digest:
+        messages.append({"role": "system", "content": context_digest})
     for user_text, assistant_text in _trim_turns(prior_turns, HISTORY_LIMIT):
         messages.append({"role": "user", "content": escape_teacher_text(user_text)})
         messages.append({"role": "assistant", "content": assistant_text})

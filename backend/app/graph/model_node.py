@@ -13,6 +13,7 @@ def make_model_node(registry, complete, system: str):
                 list(state.get("prior") or []),
                 state.get("current_user") or "",
                 state["messages"],
+                state.get("context_digest") or "",
             ),
             tools or None,
         )
