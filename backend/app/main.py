@@ -21,6 +21,12 @@ from app.api.auth import (
 from app.api.errors import error_payload
 from app.api.messages import RequestError, parse_create_conversation, parse_message
 from app.api.probe import parse_probe
+from app.api.teaching import (
+    parse_create_assignment,
+    parse_create_class,
+    parse_create_document,
+    parse_create_point,
+)
 from app.api.views import conversation_payload, task_payload
 from app.auth.passwords import burn_password_check, hash_password, verify_password
 from app.auth.remember import hash_remember_token, issue_remember_token, remember_expiry, remember_now
@@ -42,6 +48,8 @@ from app.storage import open_repository
 from app.storage.files import FileStore
 from app.storage.protocol import ConflictError, NotFoundError, User
 from app.tasks.runner import fail_stale_tasks, run_turn
+from app.teaching.digest import build_digest
+from app.teaching.insights import teaching_insights
 from app.tools.registry import assert_projection_budget, production_registry
 
 _TASK_ID = re.compile(r"^[0-9a-f]{32}$")
@@ -315,6 +323,128 @@ def create_app(settings: Settings | None = None, complete=None, probe=None, env_
             "environment": _public_llm(environment),
             "dotenv": _public_llm(dotenv),
         }
+
+    @app.get("/api/teaching/overview")
+    def teaching_overview(request: Request):
+        user, denied = require_user(request)
+        if denied is not None:
+            return denied
+        data = repository.load_teaching(user.id)
+        return {
+            "classes": [
+                {
+                    "class_id": item.id,
+                    "name": item.name,
+                    "created_at": item.created_at,
+                    "students": [student.name for student in data.students if student.class_id == item.id],
+                }
+                for item in data.classes
+            ],
+            "knowledge_points": [
+                {
+                    "point_id": item.id,
+                    "name": item.name,
+                    "description": item.description,
+                    "prerequisites": list(item.prerequisites),
+                }
+                for item in data.knowledge_points
+            ],
+            "assignments": [
+                {
+                    "assignment_id": item.id,
+                    "class_id": item.class_id,
+                    "title": item.title,
+                    "kind": item.kind,
+                    "created_at": item.created_at,
+                }
+                for item in data.assignments
+            ],
+            "documents": [
+                {
+                    "document_id": item.id,
+                    "doc_type": item.doc_type,
+                    "title": item.title,
+                    "created_at": item.created_at,
+                }
+                for item in data.documents
+            ],
+        }
+
+    @app.get("/api/teaching/insights")
+    def teaching_insights_view(request: Request):
+        user, denied = require_user(request)
+        if denied is not None:
+            return denied
+        return teaching_insights(repository.load_teaching(user.id))
+
+    @app.post("/api/teaching/classes")
+    async def create_teaching_class(request: Request):
+        user, denied = require_user(request)
+        if denied is not None:
+            return denied
+        try:
+            body = json.loads(await request.body() or b"null")
+            name, students = parse_create_class(body)
+        except json.JSONDecodeError:
+            return JSONResponse(error_payload("invalid_input"), status_code=400)
+        except RequestError as exc:
+            return JSONResponse(error_payload("invalid_input", exc.public_message), status_code=400)
+        try:
+            class_id = repository.create_class(user.id, name, students)
+        except ConflictError:
+            return JSONResponse(error_payload("conflict", "这个班级名已经存在。"), status_code=409)
+        return JSONResponse({"class_id": class_id}, status_code=201)
+
+    @app.post("/api/teaching/points")
+    async def create_teaching_point(request: Request):
+        user, denied = require_user(request)
+        if denied is not None:
+            return denied
+        try:
+            body = json.loads(await request.body() or b"null")
+            name, description, prerequisites = parse_create_point(body)
+        except json.JSONDecodeError:
+            return JSONResponse(error_payload("invalid_input"), status_code=400)
+        except RequestError as exc:
+            return JSONResponse(error_payload("invalid_input", exc.public_message), status_code=400)
+        try:
+            point_id = repository.create_knowledge_point(user.id, name, description, prerequisites)
+        except ConflictError:
+            return JSONResponse(error_payload("conflict", "这个知识点名称已经存在。"), status_code=409)
+        return JSONResponse({"point_id": point_id}, status_code=201)
+
+    @app.post("/api/teaching/assignments")
+    async def create_teaching_assignment(request: Request):
+        user, denied = require_user(request)
+        if denied is not None:
+            return denied
+        try:
+            body = json.loads(await request.body() or b"null")
+            assignment = parse_create_assignment(body)
+        except json.JSONDecodeError:
+            return JSONResponse(error_payload("invalid_input"), status_code=400)
+        except RequestError as exc:
+            return JSONResponse(error_payload("invalid_input", exc.public_message), status_code=400)
+        try:
+            assignment_id = repository.create_assignment(user.id, assignment)
+        except NotFoundError:
+            return JSONResponse(error_payload("not_found"), status_code=404)
+        return JSONResponse({"assignment_id": assignment_id}, status_code=201)
+
+    @app.post("/api/teaching/documents")
+    async def create_teaching_document(request: Request):
+        user, denied = require_user(request)
+        if denied is not None:
+            return denied
+        try:
+            body = json.loads(await request.body() or b"null")
+            doc_type, title, content = parse_create_document(body)
+        except json.JSONDecodeError:
+            return JSONResponse(error_payload("invalid_input"), status_code=400)
+        except RequestError as exc:
+            return JSONResponse(error_payload("invalid_input", exc.public_message), status_code=400)
+        document_id = repository.create_document(user.id, doc_type, title, content)
+        return JSONResponse({"document_id": document_id}, status_code=201)
 
     def preview(artifact_id: str, version: int, relative_path: str = ""):
         result = load_preview(store, artifact_id, version, relative_path)

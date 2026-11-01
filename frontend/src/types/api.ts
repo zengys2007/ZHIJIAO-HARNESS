@@ -92,3 +92,102 @@ export type ConversationApi = {
   /** 手动审批：拒绝一个 pending 的工具调用，拒绝后 tool_result 记录拒绝原因 */
   rejectCall(conversationId: string, taskId: string, callId: string): Promise<void>;
 };
+
+// ===== 教学上下文（备课与学情）=====
+
+/** /api/teaching/overview 返回的班级（含名单） */
+export type TeachingClassSummary = {
+  class_id: string;
+  name: string;
+  created_at: string;
+  students: string[];
+};
+
+export type TeachingPointSummary = {
+  point_id: string;
+  name: string;
+  description: string;
+  prerequisites: string[];
+};
+
+export type TeachingAssignmentSummary = {
+  assignment_id: string;
+  class_id: string;
+  title: string;
+  kind: string;
+  created_at: string;
+};
+
+export type TeachingDocumentSummary = {
+  document_id: string;
+  doc_type: string;
+  title: string;
+  created_at: string;
+};
+
+export type TeachingOverview = {
+  classes: TeachingClassSummary[];
+  knowledge_points: TeachingPointSummary[];
+  assignments: TeachingAssignmentSummary[];
+  documents: TeachingDocumentSummary[];
+};
+
+export type InsightPoint = {
+  name: string;
+  latest_rate: number | null;
+  previous_rate: number | null;
+  recent_rate: number | null;
+  covered: number;
+};
+
+export type WeakPoint = {
+  name: string;
+  rate: number;
+};
+
+export type StudentInsight = {
+  name: string;
+  overall_rate: number | null;
+  by_point: Record<string, number>;
+  weak: string[];
+};
+
+export type ClassInsights = {
+  class_id: string;
+  class_name: string;
+  student_count: number;
+  recent_assignments: { id: string; title: string; kind: string; created_at: string }[];
+  latest: { id: string; title: string; kind: string; created_at: string } | null;
+  knowledge_points: InsightPoint[];
+  weak_points: WeakPoint[];
+  students: StudentInsight[];
+};
+
+export type TeachingInsights = {
+  classes: ClassInsights[];
+};
+
+/** 一次作业/测验的成绩录入 */
+export type AssignmentRecordInput = {
+  student: string;
+  scores: Record<string, number>;
+};
+
+/** 教学上下文 API。测试可注入桩实现 */
+export type TeachingApi = {
+  loadOverview(): Promise<TeachingOverview>;
+  loadInsights(): Promise<TeachingInsights>;
+  createClass(name: string, students: string[]): Promise<{ class_id: string }>;
+  createPoint(name: string, description: string, prerequisites: string[]): Promise<{ point_id: string }>;
+  createAssignment(
+    classId: string,
+    title: string,
+    kind: "homework" | "quiz",
+    records: AssignmentRecordInput[],
+  ): Promise<{ assignment_id: string }>;
+  createDocument(
+    docType: "lesson_plan" | "rubric",
+    title: string,
+    content: string,
+  ): Promise<{ document_id: string }>;
+};

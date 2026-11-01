@@ -11,13 +11,21 @@ from uuid import uuid4
 from app.artifacts.contract import ARTIFACT_TYPE, artifact_view
 from app.auth.passwords import hash_password
 from app.storage.protocol import (
+    Assignment,
+    AssignmentInput,
     ConflictError,
     ConversationSummary,
     Event,
     InputError,
+    KnowledgePoint,
     NotFoundError,
+    ScoreCell,
     Session,
+    StudentRecord,
     Task,
+    TeachingClass,
+    TeachingData,
+    TeachingDocument,
     User,
     VersionRecord,
 )
@@ -26,6 +34,16 @@ from app.tasks.states import transition as change_status
 EVENT_TYPES = {"user_message", "assistant_message", "tool_result", "artifact_published"}
 MAX_REQUEST_CHARS = 4000
 LOCAL_ADMIN = "local-admin"
+
+
+def _ordered_id() -> str:
+    """毫秒时间戳前缀 + 随机位。仍是 32 位 hex，且同秒创建的记录按创建顺序排序。"""
+    return f"{int(datetime.now(timezone.utc).timestamp() * 1000):012x}{uuid4().hex[:20]}"
+
+
+EMPTY_TEACHING_DATA = TeachingData(
+    classes=[], students=[], knowledge_points=[], assignments=[], scores=[], documents=[]
+)
 
 
 class SqliteRepository:
@@ -125,7 +143,7 @@ class SqliteRepository:
         if preset_hint is not None:
             raise InputError("invalid preset hint")
         now = _now()
-        task_id = uuid4().hex
+        task_id = _ordered_id()
         with self.transaction():
             self._conn.execute(
                 """
@@ -185,7 +203,7 @@ class SqliteRepository:
         text = content.strip()
         if text == "" or len(text) > MAX_REQUEST_CHARS:
             raise InputError("invalid task request")
-        task_id = uuid4().hex
+        task_id = _ordered_id()
         now = _now()
         with self.transaction():
             found = self._conn.execute(
@@ -416,6 +434,220 @@ class SqliteRepository:
             metadata=record.metadata,
         )
 
+    def get_conversation_owner(self, conversation_id: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT owner_id FROM conversations WHERE id = ?", (conversation_id,)
+        ).fetchone()
+        return row["owner_id"] if row else None
+
+    def create_class(self, owner_id: str, name: str, student_names: list[str]) -> str:
+        class_id = uuid4().hex
+        now = _now()
+        try:
+            with self.transaction():
+                self._conn.execute(
+                    "INSERT INTO classes (id, owner_id, name, created_at) VALUES (?, ?, ?, ?)",
+                    (class_id, owner_id, name, now),
+                )
+                for position, student_name in enumerate(student_names):
+                    self._conn.execute(
+                        "INSERT INTO students (id, class_id, name, created_at) VALUES (?, ?, ?, ?)",
+                        (f"{class_id}:{position}:{uuid4().hex[:8]}", class_id, student_name, now),
+                    )
+        except sqlite3.IntegrityError as exc:
+            raise ConflictError("class name taken") from exc
+        return class_id
+
+    def create_knowledge_point(
+        self, owner_id: str, name: str, description: str, prerequisites: list[str]
+    ) -> str:
+        point_id = uuid4().hex
+        try:
+            with self.transaction():
+                self._conn.execute(
+                    """
+                    INSERT INTO knowledge_points (id, owner_id, name, description, prerequisites, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        point_id,
+                        owner_id,
+                        name,
+                        description,
+                        json.dumps(list(prerequisites), ensure_ascii=False),
+                        _now(),
+                    ),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise ConflictError("knowledge point name taken") from exc
+        return point_id
+
+    def create_assignment(self, owner_id: str, assignment: AssignmentInput) -> str:
+        assignment_id = uuid4().hex
+        now = _now()
+        with self.transaction():
+            found = self._conn.execute(
+                "SELECT id FROM classes WHERE id = ? AND owner_id = ?",
+                (assignment.class_id, owner_id),
+            ).fetchone()
+            if found is None:
+                raise NotFoundError("class not found")
+            self._conn.execute(
+                """
+                INSERT INTO assignments (id, owner_id, class_id, title, kind, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (assignment_id, owner_id, assignment.class_id, assignment.title, assignment.kind, now),
+            )
+            for student_name, cells in assignment.records:
+                student_id = self._ensure_student(assignment.class_id, student_name, now)
+                for knowledge_name, score in cells:
+                    point_id = self._ensure_knowledge_point(owner_id, knowledge_name, now)
+                    self._conn.execute(
+                        "INSERT INTO scores (id, assignment_id, student_id, knowledge_point_id, score) VALUES (?, ?, ?, ?, ?)",
+                        (uuid4().hex, assignment_id, student_id, point_id, float(score)),
+                    )
+        return assignment_id
+
+    def create_document(self, owner_id: str, doc_type: str, title: str, content: str) -> str:
+        document_id = uuid4().hex
+        with self.transaction():
+            self._conn.execute(
+                """
+                INSERT INTO documents (id, owner_id, doc_type, title, content, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (document_id, owner_id, doc_type, title, content, _now()),
+            )
+        return document_id
+
+    def load_teaching(self, owner_id: str) -> TeachingData:
+        classes = [
+            TeachingClass(id=row["id"], owner_id=row["owner_id"], name=row["name"], created_at=row["created_at"])
+            for row in self._conn.execute(
+                "SELECT * FROM classes WHERE owner_id = ? ORDER BY created_at, id", (owner_id,)
+            )
+        ]
+        if not classes:
+            return EMPTY_TEACHING_DATA
+        class_ids = [item.id for item in classes]
+        placeholders = ",".join("?" for _ in class_ids)
+        students = [
+            StudentRecord(id=row["id"], class_id=row["class_id"], name=row["name"])
+            for row in self._conn.execute(
+                f"SELECT id, class_id, name FROM students WHERE class_id IN ({placeholders}) ORDER BY name",
+                class_ids,
+            )
+        ]
+        points = [
+            KnowledgePoint(
+                id=row["id"],
+                owner_id=row["owner_id"],
+                name=row["name"],
+                description=row["description"],
+                prerequisites=json.loads(row["prerequisites"]),
+            )
+            for row in self._conn.execute(
+                "SELECT * FROM knowledge_points WHERE owner_id = ? ORDER BY created_at, id", (owner_id,)
+            )
+        ]
+        assignments = [
+            Assignment(
+                id=row["id"],
+                owner_id=row["owner_id"],
+                class_id=row["class_id"],
+                title=row["title"],
+                kind=row["kind"],
+                created_at=row["created_at"],
+            )
+            for row in self._conn.execute(
+                f"""
+                SELECT a.* FROM assignments a
+                WHERE a.owner_id = ? AND a.class_id IN ({placeholders})
+                ORDER BY a.created_at, a.id
+                """,
+                [owner_id, *class_ids],
+            )
+        ]
+        scores = []
+        if assignments:
+            assignment_ids = [item.id for item in assignments]
+            assignment_marks = ",".join("?" for _ in assignment_ids)
+            student_by_id = {student.id: student.name for student in students}
+            point_by_id = {point.id: point.name for point in points}
+            rows = self._conn.execute(
+                f"""
+                SELECT s.assignment_id, s.student_id, s.knowledge_point_id, s.score
+                FROM scores s
+                WHERE s.assignment_id IN ({assignment_marks})
+                """,
+                assignment_ids,
+            )
+            for row in rows:
+                student_name = student_by_id.get(row["student_id"])
+                point_name = point_by_id.get(row["knowledge_point_id"])
+                if student_name is None or point_name is None:
+                    continue
+                scores.append(
+                    ScoreCell(
+                        assignment_id=row["assignment_id"],
+                        student_name=student_name,
+                        knowledge_point_id=row["knowledge_point_id"],
+                        knowledge_point_name=point_name,
+                        score=float(row["score"]),
+                    )
+                )
+        documents = [
+            TeachingDocument(
+                id=row["id"],
+                owner_id=row["owner_id"],
+                doc_type=row["doc_type"],
+                title=row["title"],
+                content=row["content"],
+                created_at=row["created_at"],
+            )
+            for row in self._conn.execute(
+                "SELECT * FROM documents WHERE owner_id = ? ORDER BY created_at, id", (owner_id,)
+            )
+        ]
+        return TeachingData(
+            classes=classes,
+            students=students,
+            knowledge_points=points,
+            assignments=assignments,
+            scores=scores,
+            documents=documents,
+        )
+
+    def _ensure_student(self, class_id: str, name: str, now: str) -> str:
+        row = self._conn.execute(
+            "SELECT id FROM students WHERE class_id = ? AND name = ?", (class_id, name)
+        ).fetchone()
+        if row is not None:
+            return row["id"]
+        student_id = uuid4().hex
+        self._conn.execute(
+            "INSERT INTO students (id, class_id, name, created_at) VALUES (?, ?, ?, ?)",
+            (student_id, class_id, name, now),
+        )
+        return student_id
+
+    def _ensure_knowledge_point(self, owner_id: str, name: str, now: str) -> str:
+        row = self._conn.execute(
+            "SELECT id FROM knowledge_points WHERE owner_id = ? AND name = ?", (owner_id, name)
+        ).fetchone()
+        if row is not None:
+            return row["id"]
+        point_id = uuid4().hex
+        self._conn.execute(
+            """
+            INSERT INTO knowledge_points (id, owner_id, name, description, prerequisites, created_at)
+            VALUES (?, ?, ?, '', '[]', ?)
+            """,
+            (point_id, owner_id, name, now),
+        )
+        return point_id
+
     @contextmanager
     def transaction(self):
         with self._lock:
@@ -504,6 +736,55 @@ class SqliteRepository:
               created_at TEXT NOT NULL,
               PRIMARY KEY (artifact_id, version)
             );
+            CREATE TABLE IF NOT EXISTS classes (
+              id TEXT PRIMARY KEY,
+              owner_id TEXT NOT NULL,
+              name TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              UNIQUE (owner_id, name)
+            );
+            CREATE TABLE IF NOT EXISTS students (
+              id TEXT PRIMARY KEY,
+              class_id TEXT NOT NULL,
+              name TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              UNIQUE (class_id, name)
+            );
+            CREATE TABLE IF NOT EXISTS knowledge_points (
+              id TEXT PRIMARY KEY,
+              owner_id TEXT NOT NULL,
+              name TEXT NOT NULL,
+              description TEXT NOT NULL DEFAULT '',
+              prerequisites TEXT NOT NULL DEFAULT '[]',
+              created_at TEXT NOT NULL,
+              UNIQUE (owner_id, name)
+            );
+            CREATE TABLE IF NOT EXISTS assignments (
+              id TEXT PRIMARY KEY,
+              owner_id TEXT NOT NULL,
+              class_id TEXT NOT NULL,
+              title TEXT NOT NULL,
+              kind TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS scores (
+              id TEXT PRIMARY KEY,
+              assignment_id TEXT NOT NULL,
+              student_id TEXT NOT NULL,
+              knowledge_point_id TEXT NOT NULL,
+              score REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS documents (
+              id TEXT PRIMARY KEY,
+              owner_id TEXT NOT NULL,
+              doc_type TEXT NOT NULL,
+              title TEXT NOT NULL,
+              content TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_assignments_class ON assignments (class_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_scores_assignment ON scores (assignment_id);
+            CREATE INDEX IF NOT EXISTS idx_students_class ON students (class_id);
             """
         )
 
