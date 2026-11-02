@@ -12,6 +12,16 @@ type ComposerProps = {
   leadingSlot?: React.ReactNode;
   /** 可选：嵌入输入框左下角的审批分段控制器 */
   approvalSegment?: React.ReactNode;
+  /** 可选：输入框右下角的上下文用量 */
+  contextSlot?: React.ReactNode;
+  /** 计划模式。打开时在原输入框内显示灰色 plan */
+  planMode?: boolean;
+  /** 输入框无内容时按退格，退出计划模式 */
+  onExitPlan?: () => void;
+  /** 目标内联编辑。打开时在原输入框内显示灰色 goal，提交保存目标 */
+  goalEditMode?: boolean;
+  /** 输入框无内容时按退格，退出目标编辑（不提交） */
+  onExitGoal?: () => void;
 };
 
 export function Composer({
@@ -23,9 +33,18 @@ export function Composer({
   attachmentSlot,
   leadingSlot,
   approvalSegment,
+  contextSlot,
+  planMode = false,
+  onExitPlan,
+  goalEditMode = false,
+  onExitGoal,
 }: ComposerProps) {
   const { t } = useAppearance();
-  const canSend = !busy && value.trim().length > 0;
+  const canSend = goalEditMode ? !busy : !busy && value.trim().length > 0;
+  const fieldLabel = goalEditMode ? t("goal") : t("message");
+  const placeholder = goalEditMode ? t("goalPlaceholder") : t("draftPlaceholder");
+  const submitLabel = busy ? t("replying") : goalEditMode ? t("save") : t("send");
+  const hint = goalEditMode ? t("goalHint") : t("enterHint");
 
   return (
     <div className="dock">
@@ -37,26 +56,42 @@ export function Composer({
           if (canSend) onSubmit();
         }}
       >
-        <label className="sr-only" htmlFor="draft">
-          {t("message")}
-        </label>
-        <textarea
-          id="draft"
-          name="content"
-          rows={2}
-          placeholder={t("draftPlaceholder")}
-          value={value}
-          disabled={busy}
-          onChange={(event) => onChange(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              if (canSend) onSubmit();
-            }
-          }}
-        />
+        <div className="composer-field">
+          <label className="sr-only" htmlFor="draft">
+            {fieldLabel}
+          </label>
+          {planMode && !goalEditMode ? <span className="composer-plan">plan</span> : null}
+          {goalEditMode ? <span className="composer-goal">goal</span> : null}
+          <textarea
+            id="draft"
+            name="content"
+            rows={2}
+            placeholder={placeholder}
+            value={value}
+            disabled={busy}
+            aria-label={fieldLabel}
+            onChange={(event) => onChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                if (canSend) onSubmit();
+                return;
+              }
+              if (event.key !== "Backspace" || value.length > 0) return;
+              if (goalEditMode && onExitGoal) {
+                event.preventDefault();
+                onExitGoal();
+                return;
+              }
+              if (planMode && onExitPlan) {
+                event.preventDefault();
+                onExitPlan();
+              }
+            }}
+          />
+        </div>
         <button className="send" type="submit" disabled={!canSend}>
-          {busy ? t("replying") : t("send")}
+          {submitLabel}
         </button>
       </form>
       {alert ? (
@@ -69,7 +104,10 @@ export function Composer({
             {leadingSlot}
             {approvalSegment}
           </div>
-          <p className="hint">{t("enterHint")}</p>
+          <div className="composer-footer-right">
+            <p className="hint">{hint}</p>
+            {contextSlot}
+          </div>
         </div>
       )}
     </div>

@@ -30,7 +30,8 @@ from app.api.goals import (
     parse_update_tree,
     tree_view,
 )
-from app.api.messages import RequestError, parse_create_conversation, parse_message
+from app.api.messages import RequestError, parse_create_conversation, parse_goal, parse_message, parse_plan_mode
+from app.context.goal import GOAL_TOO_LARGE, goal_tokens
 from app.api.probe import parse_probe
 from app.api.teaching import (
     parse_create_assignment,
@@ -55,16 +56,43 @@ from app.goals.templates import semester_seed
 from app.graph.build import build_graph
 from app.llm.complete import make_complete
 from app.llm.probe import probe_chat
+from app.llm.usage import count_messages_locally, fetch_context_limit, fetch_input_tokens
 from app.preview.serve import load_preview
 from app.storage import open_repository
 from app.storage.files import FileStore
 from app.storage.protocol import ConflictError, InputError, NotFoundError, User
-from app.tasks.runner import fail_stale_tasks, run_turn
+from app.tasks.runner import TurnContext, context_view, fail_stale_tasks, make_summarizer, run_turn
 from app.teaching.digest import build_digest
 from app.teaching.insights import teaching_insights
-from app.tools.registry import assert_projection_budget, production_registry
+from app.tools.registry import production_registry
 
 _TASK_ID = re.compile(r"^[0-9a-f]{32}$")
+
+
+def _tool_schema_tokens(registry) -> int:
+    projected = registry.project()
+    if not projected:
+        return 0
+    text = json.dumps(projected, ensure_ascii=False)
+    return count_messages_locally([{"role": "system", "content": text}])
+
+
+def _exact_count(settings: Settings):
+    if not (settings.llm_base_url and settings.llm_api_key and settings.llm_model):
+        return None
+
+    def exact(messages: list[dict]) -> int | None:
+        return fetch_input_tokens(settings, messages)
+
+    return exact
+
+
+def _context_limit(settings: Settings) -> tuple[int, str]:
+    if settings.llm_base_url and settings.llm_api_key and settings.llm_model:
+        found = fetch_context_limit(settings)
+        if found:
+            return found, "provider"
+    return settings.context_token_limit, "fallback"
 
 
 def create_app(settings: Settings | None = None, complete=None, probe=None, env_file=None) -> FastAPI:
@@ -83,14 +111,24 @@ def create_app(settings: Settings | None = None, complete=None, probe=None, env_
     store = FileStore(settings.data_dir)
     fail_stale_tasks(repository, store, datetime.now(timezone.utc))
     registry = production_registry()
-    assert_projection_budget(registry)
     system_prompt = load_system_prompt()
     graph = build_graph(registry, complete, system=system_prompt)
+    limit_tokens, limit_source = _context_limit(settings)
+    turn_context = TurnContext(
+        system=system_prompt,
+        limit_tokens=limit_tokens,
+        limit_source=limit_source,
+        count_tokens=count_messages_locally,
+        summarize=make_summarizer(complete),
+        exact_count=_exact_count(settings),
+        extra_tokens=_tool_schema_tokens(registry),
+    )
     app = FastAPI()
     app.state.repository = repository
     app.state.files = store
     app.state.settings = settings
     app.state.env_file = env_file
+    app.state.turn_context = turn_context
     workbench = Path(__file__).resolve().parents[2] / "frontend" / "index.html"
 
     @app.get("/health")
@@ -279,13 +317,55 @@ def create_app(settings: Settings | None = None, complete=None, probe=None, env_
             return JSONResponse(error_payload("conflict"), status_code=409)
         threading.Thread(
             target=run_turn,
-            args=(repository, store, turn_graph, task.id),
+            args=(repository, store, turn_graph, task.id, turn_context),
             daemon=True,
         ).start()
         return JSONResponse(
             {"conversation_id": conversation_id, "task_id": task.id, "status": "pending"},
             status_code=202,
         )
+
+    @app.put("/api/conversations/{conversation_id}/goal")
+    async def put_goal(conversation_id: str, request: Request):
+        user, denied = require_user(request)
+        if denied is not None:
+            return denied
+        if _TASK_ID.fullmatch(conversation_id) is None:
+            return JSONResponse(error_payload("not_found"), status_code=404)
+        try:
+            body = json.loads(await request.body() or b"null")
+        except json.JSONDecodeError:
+            return JSONResponse(error_payload("invalid_input"), status_code=400)
+        try:
+            goal = parse_goal(body)
+        except RequestError:
+            return JSONResponse(error_payload("invalid_input"), status_code=400)
+        if goal and goal_tokens(goal, turn_context.count_tokens) > turn_context.limit_tokens - turn_context.output_reserve:
+            return JSONResponse(error_payload("invalid_input", GOAL_TOO_LARGE), status_code=400)
+        saved = repository.save_goal(conversation_id, user.id, goal)
+        if saved is None:
+            return JSONResponse(error_payload("not_found"), status_code=404)
+        return {"conversation_id": conversation_id, "goal": saved}
+
+    @app.put("/api/conversations/{conversation_id}/plan")
+    async def put_plan(conversation_id: str, request: Request):
+        user, denied = require_user(request)
+        if denied is not None:
+            return denied
+        if _TASK_ID.fullmatch(conversation_id) is None:
+            return JSONResponse(error_payload("not_found"), status_code=404)
+        try:
+            body = json.loads(await request.body() or b"null")
+        except json.JSONDecodeError:
+            return JSONResponse(error_payload("invalid_input"), status_code=400)
+        try:
+            enabled = parse_plan_mode(body)
+        except RequestError:
+            return JSONResponse(error_payload("invalid_input"), status_code=400)
+        saved = repository.save_plan_mode(conversation_id, user.id, enabled)
+        if saved is None:
+            return JSONResponse(error_payload("not_found"), status_code=404)
+        return {"conversation_id": conversation_id, "plan_mode": saved}
 
     @app.get("/api/conversations/{conversation_id}")
     def read_conversation(conversation_id: str, request: Request):
@@ -297,7 +377,11 @@ def create_app(settings: Settings | None = None, complete=None, probe=None, env_
         tasks = repository.list_conversation_tasks(conversation_id, user.id)
         if tasks is None:
             return JSONResponse(error_payload("not_found"), status_code=404)
-        return conversation_payload(conversation_id, tasks)
+        payload = conversation_payload(conversation_id, tasks)
+        payload["goal"] = repository.get_goal(conversation_id)
+        payload["plan_mode"] = repository.get_plan_mode(conversation_id)
+        payload["context"] = context_view(repository, conversation_id, turn_context)
+        return payload
 
     @app.get("/api/tasks/{task_id}")
     def read_task(task_id: str, request: Request):

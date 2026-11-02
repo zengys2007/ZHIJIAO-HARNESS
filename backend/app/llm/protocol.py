@@ -14,6 +14,8 @@ class ToolCall:
 class AssistantMessage:
     content: str
     tool_calls: list[ToolCall]
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
 
 
 @dataclass

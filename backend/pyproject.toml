@@ -7,6 +7,7 @@ dependencies = [
   "fastapi>=0.115",
   "uvicorn>=0.32",
   "langgraph>=0.4",
+  "tiktoken>=0.7",
 ]
 
 [project.optional-dependencies]

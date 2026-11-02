@@ -1,3 +1,4 @@
+import { countGoalTokens, countMessageList, countPlanTokens } from "../lib/tokens";
 import type {
   ConversationApi,
   ConversationMessage,
@@ -19,6 +20,8 @@ const MOCK_TOOL_POOL: { name: string; description: string; risk: "low" | "medium
 
 type Thread = {
   messages: ConversationMessage[];
+  goal: string;
+  plan_mode: boolean;
   /** task_id → 这一轮的工具调用提案（可能为空） */
   approvals: Record<string, ApprovalRecord[]>;
 };
@@ -104,7 +107,7 @@ export function createPreviewApi(now: () => string = timestamp): ConversationApi
   return {
     async createConversation() {
       const conversationId = randomId();
-      threads.set(conversationId, { messages: [], approvals: {} });
+      threads.set(conversationId, { messages: [], approvals: {}, goal: "", plan_mode: false });
       return { conversation_id: conversationId };
     },
     async sendMessage(conversationId, content, _options) {
@@ -138,7 +141,44 @@ export function createPreviewApi(now: () => string = timestamp): ConversationApi
         }
         merged.push({ ...message });
       }
-      return { conversation_id: conversationId, messages: merged };
+      return {
+        conversation_id: conversationId,
+        messages: merged,
+        goal: thread.goal,
+        plan_mode: thread.plan_mode,
+        context: {
+          used_tokens:
+            countMessageList(merged.map((message) => message.content)) +
+            countGoalTokens(thread.goal) +
+            countPlanTokens(thread.plan_mode),
+          limit_tokens: 1_000_000,
+          limit_source: "fallback" as const,
+          compressed: false,
+          parts: [
+            { name: "system", tokens: 0 },
+            { name: "tools", tokens: 0 },
+            { name: "context", tokens: 0 },
+            { name: "summary", tokens: 0 },
+            { name: "goal", tokens: countGoalTokens(thread.goal) },
+            { name: "plan", tokens: countPlanTokens(thread.plan_mode) },
+            { name: "conversation", tokens: countMessageList(merged.map((message) => message.content)) },
+          ],
+        },
+      };
+    },
+    async setGoal(conversationId, goal) {
+      const thread = getThread(conversationId);
+      if (!thread) throw new Error("会话不存在");
+      thread.goal = goal.trim();
+      threads.set(conversationId, thread);
+      return { conversation_id: conversationId, goal: thread.goal };
+    },
+    async setPlanMode(conversationId, planMode) {
+      const thread = getThread(conversationId);
+      if (!thread) throw new Error("会话不存在");
+      thread.plan_mode = planMode;
+      threads.set(conversationId, thread);
+      return { conversation_id: conversationId, plan_mode: thread.plan_mode };
     },
     async getTask(taskId) {
       const found = findTaskThread(taskId);

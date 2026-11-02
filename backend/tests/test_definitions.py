@@ -5,6 +5,7 @@ import pytest
 from app.api.errors import error_body
 from app.artifacts.contract import CAPABILITIES, ARTIFACT_TYPE, artifact_view
 from app.config import load_env_file, load_settings
+from app.context.prompt import load_system_prompt
 from app.tasks.states import FAILED, PENDING, RUNNING, SUCCEEDED, transition
 
 
@@ -38,7 +39,7 @@ def test_error_body_uses_one_shape_and_known_retry_flags():
     assert set(refused) == {"code", "message", "retryable"}
     assert refused == {
         "code": "invalid_input",
-        "message": "请把这句话写成 1 到 4000 字后再发送。",
+        "message": "这句话是空的，或请求格式不对。",
         "retryable": False,
     }
     assert retryable["code"] == "model_timeout"
@@ -124,6 +125,18 @@ def test_env_file_fills_missing_names_without_overriding(monkeypatch, tmp_path):
 
     assert os.environ["LLM_MODEL"] == "from-file"
     assert os.environ["ALREADY"] == "from-env"
+
+
+def test_system_prompt_states_teacher_discipline_and_format():
+    text = load_system_prompt()
+    assert "纪律" in text
+    assert "格式" in text
+    assert "没有提供的工具" in text
+    assert "一次只提出一个调用" in text
+    assert "不要编造" in text
+    assert "学情" in text and "出题" in text and "评语" in text and "课件" in text
+    assert "演示文稿" in text
+    assert text != ""
 
 
 def test_settings_refuse_to_start_without_a_model_key(monkeypatch):

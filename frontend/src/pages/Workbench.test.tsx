@@ -244,7 +244,7 @@ describe("工作台", () => {
     expect(screen.getByRole("button", { name: "发送" })).toHaveProperty("disabled", true);
   });
 
-  it("超过 4000 字时不发送", async () => {
+  it("超过 4000 字仍会发送", async () => {
     const user = userEvent.setup();
     let sent = 0;
     const api = immediateApi();
@@ -260,8 +260,8 @@ describe("工作台", () => {
     await user.paste("课".repeat(4001));
     await user.click(screen.getByRole("button", { name: "发送" }));
 
-    expect(screen.getByRole("alert").textContent).toContain("请把这句话写成 1 到 4000 字后再发送。");
-    expect(sent).toBe(0);
+    expect(sent).toBe(1);
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("加号菜单：权限项与左下角审批控制器同步切换", async () => {
@@ -281,6 +281,92 @@ describe("工作台", () => {
     expect(screen.getByRole("button", { name: "审批模式" }).textContent).toContain("自动执行");
     // 菜单项描述同步更新
     expect(screen.getByRole("menuitem", { name: /权限/ }).textContent).toContain("当前：自动执行");
+  });
+
+  it("加号菜单：计划在原输入框里显示灰色 plan，再点一次退出", async () => {
+    const user = userEvent.setup();
+    const modes: boolean[] = [];
+    const api = scriptedApi([Promise.resolve(succeeded("预览回复"))]);
+    const baseSetPlan = api.setPlanMode.bind(api);
+    api.setPlanMode = async (id, enabled) => {
+      modes.push(enabled);
+      return baseSetPlan(id, enabled);
+    };
+    renderLoggedIn({ api });
+    await screen.findByRole("button", { name: "发送" });
+
+    expect(document.querySelector(".composer-plan")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    await user.click(screen.getByRole("menuitem", { name: /计划/ }));
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("menu")).toBeNull();
+    const mark = document.querySelector(".composer .composer-plan");
+    expect(mark?.textContent).toBe("plan");
+    expect(document.querySelector(".composer-footer .composer-plan")).toBeNull();
+    expect(screen.getAllByRole("textbox").some((node) => node.getAttribute("aria-label") === "目标")).toBe(false);
+    expect(modes).toEqual([true]);
+
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    await user.click(screen.getByRole("menuitem", { name: /计划/ }));
+    expect(document.querySelector(".composer-plan")).toBeNull();
+    expect(modes).toEqual([true, false]);
+
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    await user.click(screen.getByRole("menuitem", { name: /计划/ }));
+    expect(document.querySelector(".composer-plan")).toBeTruthy();
+    await user.click(screen.getByRole("textbox", { name: "消息" }));
+    await user.keyboard("{Backspace}");
+    expect(document.querySelector(".composer-plan")).toBeNull();
+    expect(modes).toEqual([true, false, true, false]);
+  });
+
+  it("加号菜单：目标在原输入框内联编辑，保存后可再打开查看，空退格退出不清除", async () => {
+    const user = userEvent.setup();
+    const goals: string[] = [];
+    const api = scriptedApi([Promise.resolve(succeeded("预览回复"))]);
+    const baseSetGoal = api.setGoal.bind(api);
+    api.setGoal = async (id, goal) => {
+      goals.push(goal);
+      return baseSetGoal(id, goal);
+    };
+    renderLoggedIn({ api });
+    await screen.findByRole("button", { name: "发送" });
+
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    await user.click(screen.getByRole("menuitem", { name: /^目标 goal/ }));
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(document.querySelector(".composer .composer-goal")?.textContent).toBe("goal");
+    expect(screen.getByRole("button", { name: "保存" })).toBeTruthy();
+
+    const box = screen.getByRole("textbox", { name: "目标" });
+    await user.clear(box);
+    await user.type(box, "把异分母加减讲通");
+    await user.click(screen.getByRole("button", { name: "保存" }));
+
+    expect(goals).toEqual(["把异分母加减讲通"]);
+    expect(document.querySelector(".composer-goal")).toBeNull();
+    expect(screen.getByRole("button", { name: "发送" })).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    expect(screen.getByRole("menuitem", { name: /^目标 goal/ }).textContent).toContain("把异分母加减讲通");
+    await user.click(screen.getByRole("menuitem", { name: /^目标 goal/ }));
+    expect((screen.getByRole("textbox", { name: "目标" }) as HTMLTextAreaElement).value).toBe(
+      "把异分母加减讲通",
+    );
+
+    await user.clear(screen.getByRole("textbox", { name: "目标" }));
+    await user.keyboard("{Backspace}");
+    expect(document.querySelector(".composer-goal")).toBeNull();
+    expect(goals).toEqual(["把异分母加减讲通"]);
+
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    await user.click(screen.getByRole("menuitem", { name: /^目标 goal/ }));
+    expect((screen.getByRole("textbox", { name: "目标" }) as HTMLTextAreaElement).value).toBe(
+      "把异分母加减讲通",
+    );
   });
 
   it("加号菜单：未实现项点击后弹出尚未开放提示", async () => {
@@ -606,7 +692,7 @@ describe("工作台", () => {
     await screen.findByRole("button", { name: "发送" });
 
     await user.click(screen.getByRole("button", { name: "更多操作" }));
-    await user.click(screen.getByRole("menuitem", { name: /目标/ }));
+    await user.click(screen.getByRole("menuitem", { name: /目标管理/ }));
     expect(await screen.findByRole("region", { name: "目标管理" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "返回对话" }));
     expect(screen.queryByRole("region", { name: "目标管理" })).toBeNull();
@@ -644,6 +730,8 @@ function immediateApi(): ConversationApi {
 function scriptedApi(results: Array<Promise<TaskSnapshot>>): ConversationApi {
   const messages: ConversationMessage[] = [];
   let cursor = 0;
+  let goal = "";
+  let planMode = false;
   return {
     async createConversation() {
       return { conversation_id: conversationId };
@@ -672,12 +760,20 @@ function scriptedApi(results: Array<Promise<TaskSnapshot>>): ConversationApi {
       return { conversation_id: conversationId, task_id: task.task_id, status: "pending" };
     },
     async getConversation() {
-      return { conversation_id: conversationId, messages: messages.slice() };
+      return { conversation_id: conversationId, messages: messages.slice(), goal, plan_mode: planMode };
     },
     async getTask() {
       return results[Math.min(cursor - 1, results.length - 1)];
     },
     async approveCall() {},
     async rejectCall() {},
+    async setGoal(_conversationId, next) {
+      goal = next.trim();
+      return { conversation_id: conversationId, goal };
+    },
+    async setPlanMode(_conversationId, enabled) {
+      planMode = enabled;
+      return { conversation_id: conversationId, plan_mode: planMode };
+    },
   };
 }

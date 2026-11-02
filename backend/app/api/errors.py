@@ -1,7 +1,7 @@
 """error.code / message / retryable 的唯一定义。"""
 
 ERRORS: dict[str, tuple[str, bool]] = {
-    "invalid_input": ("请把这句话写成 1 到 4000 字后再发送。", False),
+    "invalid_input": ("这句话是空的，或请求格式不对。", False),
     "unauthenticated": ("请先登录。", False),
     "not_found": ("没有找到这个会话或任务。", False),
     "conflict": ("上一条还在处理，请等它结束再发送。", False),

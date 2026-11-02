@@ -2,8 +2,22 @@
 
 from datetime import datetime, timedelta
 
+from dataclasses import dataclass
+
 from app.api.errors import error_body
+from app.context.compact import (
+    KEEP_RECENT_TOKENS,
+    OUTPUT_RESERVE,
+    TurnRecord,
+    prepare_context,
+    turns_after,
+)
+from app.context.assemble import context_messages
+from app.context.goal import goal_tokens
+from app.context.plan import plan_tokens
 from app.graph.build import invoke_graph
+from app.llm.protocol import AssistantMessage
+from app.llm.usage import DEFAULT_LIMIT, count_messages_locally
 from app.storage.files import FileStore
 from app.storage.protocol import Repository
 from app.tasks.states import FAILED, PENDING, RUNNING, SUCCEEDED
@@ -14,7 +28,20 @@ MODEL_FAILURES = {"model_timeout", "model_invalid_output", "model_upstream"}
 STALE_AFTER = timedelta(minutes=10)
 
 
-def run_turn(repo: Repository, store: FileStore, graph, task_id: str) -> None:
+@dataclass
+class TurnContext:
+    system: str
+    limit_tokens: int
+    limit_source: str
+    count_tokens: callable
+    summarize: callable
+    exact_count: callable | None = None
+    extra_tokens: int = 0
+    keep_recent: int = KEEP_RECENT_TOKENS
+    output_reserve: int = OUTPUT_RESERVE
+
+
+def run_turn(repo: Repository, store: FileStore, graph, task_id: str, turn_context: TurnContext | None = None) -> None:
     task = repo.get_task(task_id)
     if task is None:
         raise KeyError(task_id)
@@ -22,18 +49,25 @@ def run_turn(repo: Repository, store: FileStore, graph, task_id: str) -> None:
         raise ValueError("task is not pending")
     repo.transition(task_id, RUNNING)
     repo.append_event(task_id, "user_message", {"content": task.raw_request})
-    prior = repo.succeeded_turns(task.conversation_id) if task.conversation_id else []
-    digest = _teaching_digest(repo, task.conversation_id)
+    digest = _teaching_digest(repo, task.conversation_id, turn_context)
+    goal = repo.get_goal(task.conversation_id) if task.conversation_id else ""
+    plan = repo.get_plan_mode(task.conversation_id) if task.conversation_id else False
+    prior, summary, model_user = _prepare_prior(repo, task, digest, turn_context, goal, plan)
     state = {
         "messages": [],
         "prior": prior,
-        "current_user": task.raw_request,
+        "current_user": model_user,
         "candidate": None,
         "step_count": 0,
         "stop": "",
         "task_id": task_id,
         "store": store,
         "context_digest": digest,
+        "context_summary": summary,
+        "context_goal": goal,
+        "context_plan": plan,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
     }
     try:
         result = invoke_graph(graph, state)
@@ -41,6 +75,7 @@ def run_turn(repo: Repository, store: FileStore, graph, task_id: str) -> None:
         _fail(repo, store, task_id, "internal", None)
         return
     _record_messages(repo, task_id, result["messages"])
+    _save_usage(repo, task.conversation_id, result)
     step_count = result["step_count"]
     repo.set_step_count(task_id, step_count)
     stop = result.get("stop") or ""
@@ -69,13 +104,154 @@ def fail_stale_tasks(repo: Repository, store: FileStore, now: datetime) -> None:
             repo.transition(task.id, FAILED, error_code="interrupted", error_message=body["message"])
 
 
-def _teaching_digest(repo: Repository, conversation_id: str | None) -> str:
+def context_view(repo: Repository, conversation_id: str, turn_context: TurnContext | None) -> dict:
+    summary, until, stored = repo.get_context_state(conversation_id)
+    limit = turn_context.limit_tokens if turn_context else DEFAULT_LIMIT
+    source = turn_context.limit_source if turn_context else "fallback"
+    records = [TurnRecord(*row) for row in repo.succeeded_turn_records(conversation_id)]
+    digest = _teaching_digest(repo, conversation_id, turn_context)
+    system = turn_context.system if turn_context else ""
+    counter = turn_context.count_tokens if turn_context else count_messages_locally
+    tools = turn_context.extra_tokens if turn_context else 0
+    goal = repo.get_goal(conversation_id)
+    plan = repo.get_plan_mode(conversation_id)
+    parts, local_total = _context_parts(
+        counter, system, digest, summary, turns_after(records, until), tools, goal, plan
+    )
+    return {
+        "used_tokens": stored if stored is not None else local_total,
+        "limit_tokens": limit,
+        "limit_source": source,
+        "compressed": bool(summary),
+        "parts": parts,
+    }
+
+
+def _context_parts(
+    counter,
+    system: str,
+    digest: str,
+    summary: str,
+    turns: list[TurnRecord],
+    tools: int,
+    goal: str = "",
+    plan: bool = False,
+):
+    system_msgs = [{"role": "system", "content": system}] if system else []
+    digest_msgs = [{"role": "system", "content": digest}] if digest else []
+    summary_msgs = [{"role": "user", "content": summary}] if summary else []
+    conversation_msgs = context_messages([], "", _pairs(turns), None)
+    system_tokens = _span(counter, system_msgs)
+    context_tokens = _delta(counter, system_msgs, digest_msgs)
+    summary_tokens = _delta(counter, system_msgs + digest_msgs, summary_msgs)
+    goal_cost = goal_tokens(goal, counter)
+    plan_cost = plan_tokens(plan, counter)
+    conversation_tokens = _delta(counter, system_msgs + digest_msgs + summary_msgs, conversation_msgs)
+    parts = [
+        {"name": "system", "tokens": system_tokens},
+        {"name": "tools", "tokens": tools},
+        {"name": "context", "tokens": context_tokens},
+        {"name": "summary", "tokens": summary_tokens},
+        {"name": "goal", "tokens": goal_cost},
+        {"name": "plan", "tokens": plan_cost},
+        {"name": "conversation", "tokens": conversation_tokens},
+    ]
+    return (
+        parts,
+        system_tokens + tools + context_tokens + summary_tokens + goal_cost + plan_cost + conversation_tokens,
+    )
+
+
+def _span(counter, messages: list[dict]) -> int:
+    if not messages:
+        return 0
+    return counter(messages)
+
+
+def _delta(counter, base: list[dict], extra: list[dict]) -> int:
+    if not extra:
+        return 0
+    if not base:
+        return counter(extra)
+    return counter(base + extra) - counter(base)
+
+
+def _prepare_prior(
+    repo: Repository,
+    task,
+    digest: str,
+    turn_context: TurnContext | None,
+    goal: str = "",
+    plan: bool = False,
+):
+    if not task.conversation_id:
+        return [], "", task.raw_request
+    if turn_context is None:
+        return repo.succeeded_turns(task.conversation_id), "", task.raw_request
+    records = [TurnRecord(*row) for row in repo.succeeded_turn_records(task.conversation_id)]
+    summary, until, _used = repo.get_context_state(task.conversation_id)
+    prefix = [{"role": "system", "content": turn_context.system}]
+    if digest:
+        prefix.append({"role": "system", "content": digest})
+    prepared = prepare_context(
+        records,
+        summary,
+        until,
+        prefix,
+        task.raw_request,
+        count_tokens=turn_context.count_tokens,
+        summarize=turn_context.summarize,
+        limit=turn_context.limit_tokens,
+        keep_recent=turn_context.keep_recent,
+        output_reserve=turn_context.output_reserve,
+        exact_count=turn_context.exact_count,
+        extra_tokens=(
+            turn_context.extra_tokens
+            + goal_tokens(goal, turn_context.count_tokens)
+            + plan_tokens(plan, turn_context.count_tokens)
+        ),
+    )
+    if prepared.compacted:
+        repo.save_context_summary(task.conversation_id, prepared.summary, prepared.until_task_id)
+    return [(turn.user_text, turn.assistant_text) for turn in prepared.kept], prepared.summary, prepared.model_user
+
+
+def _save_usage(repo: Repository, conversation_id: str | None, result: dict) -> None:
+    if not conversation_id:
+        return
+    prompt = result.get("prompt_tokens") or 0
+    completion = result.get("completion_tokens") or 0
+    if prompt:
+        repo.save_context_usage(conversation_id, prompt + completion)
+
+
+def _pairs(turns: list[TurnRecord]) -> list[tuple[str, str]]:
+    return [(turn.user_text, turn.assistant_text) for turn in turns]
+
+
+def make_summarizer(complete):
+    def summarize(prompt: str) -> str | None:
+        result = complete([{"role": "user", "content": prompt}], None)
+        if isinstance(result, AssistantMessage):
+            text = result.content.strip()
+            return text or None
+        return None
+
+    return summarize
+
+
+def _teaching_digest(repo: Repository, conversation_id: str | None, turn_context: TurnContext | None = None) -> str:
     if not conversation_id:
         return ""
     owner_id = repo.get_conversation_owner(conversation_id)
     if not owner_id:
         return ""
-    return build_digest(repo.load_teaching(owner_id))
+    budget = None
+    counter = None
+    if turn_context is not None:
+        budget = max(turn_context.limit_tokens - turn_context.output_reserve - turn_context.extra_tokens, 1)
+        counter = turn_context.count_tokens
+    return build_digest(repo.load_teaching(owner_id), token_budget=budget, count_tokens=counter)
 
 
 def _final_reply(messages: list[dict]) -> str:

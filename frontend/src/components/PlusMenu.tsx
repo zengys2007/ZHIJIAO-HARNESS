@@ -11,9 +11,24 @@ type Props = {
   onOpenModel: () => void;
   /** 打开目标管理视图 */
   onOpenGoals: () => void;
+  /** 计划模式是否打开。打开时消息栏显示灰色 plan */
+  planMode: boolean;
+  onPlanModeChange: (enabled: boolean) => void;
+  /** 已保存的会话目标；有内容时菜单描述展示截断原文 */
+  goal: string;
+  /** 是否正在内联编辑目标 */
+  goalEditMode: boolean;
+  onGoalEditModeChange: (enabled: boolean) => void;
   /** 点击未实现的功能项时触发 */
   onUnavailable: () => void;
 };
+
+/** 菜单右侧目标描述过长时截断 */
+function truncateGoal(text: string, max = 16): string {
+  const chars = [...text.trim()];
+  if (chars.length <= max) return text.trim();
+  return `${chars.slice(0, max).join("")}…`;
+}
 
 type Item = {
   key: string;
@@ -22,7 +37,7 @@ type Item = {
   /** 右侧灰色描述；权限项由运行时计算 */
   desc?: string;
   icon: React.ReactNode;
-  kind: "plain" | "permission" | "model" | "file";
+  kind: "plain" | "permission" | "model" | "file" | "plan" | "goal";
 };
 
 /** 未实现项点击后的统一提示文案 */
@@ -34,6 +49,11 @@ export function PlusMenu({
   onPickFile,
   onOpenModel,
   onOpenGoals,
+  planMode,
+  onPlanModeChange,
+  goal,
+  goalEditMode,
+  onGoalEditModeChange,
   onUnavailable,
 }: Props) {
   const { locale, t } = useAppearance();
@@ -64,8 +84,20 @@ export function PlusMenu({
       title: t("add"),
       items: [
         { key: "file", label: t("file"), en: "file", icon: <FileIcon />, kind: "file" },
-        { key: "goal", label: t("goal"), en: "goal", desc: t("goalDesc"), icon: <GoalIcon />, kind: "plain" },
-        { key: "plan", label: t("plan"), en: "plan", desc: t("planDesc"), icon: <PlanIcon />, kind: "plain" },
+        {
+          key: "goal",
+          label: t("goal"),
+          en: "goal",
+          desc: goalEditMode
+            ? `${t("currentPrefix")}${t("goal")}`
+            : goal.trim()
+              ? truncateGoal(goal)
+              : t("goalDesc"),
+          icon: <GoalIcon />,
+          kind: "goal",
+        },
+        { key: "goals", label: t("goalManage"), en: "library", desc: t("goalManageDesc"), icon: <GoalIcon />, kind: "plain" },
+        { key: "plan", label: t("plan"), en: "plan", desc: planMode ? `${t("currentPrefix")}${t("plan")}` : t("planDesc"), icon: <PlanIcon />, kind: "plan" },
         { key: "feedback", label: t("feedback"), en: "feedback", desc: t("feedbackDesc"), icon: <FeedbackIcon />, kind: "plain" },
       ],
     },
@@ -96,7 +128,17 @@ export function PlusMenu({
       setOpen(false);
       return;
     }
-    if (item.key === "goal") {
+    if (item.kind === "plan") {
+      onPlanModeChange(!planMode);
+      setOpen(false);
+      return;
+    }
+    if (item.kind === "goal") {
+      onGoalEditModeChange(!goalEditMode);
+      setOpen(false);
+      return;
+    }
+    if (item.key === "goals") {
       onOpenGoals();
       setOpen(false);
       return;

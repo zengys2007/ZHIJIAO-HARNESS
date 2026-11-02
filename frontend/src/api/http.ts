@@ -59,7 +59,24 @@ export const httpApi: ConversationApi = {
     return {
       conversation_id: readId(body, "conversation_id"),
       messages: readMessages(body),
+      context: readContext(body),
+      goal: readGoal(body),
+      plan_mode: readPlanMode(body),
     };
+  },
+  setGoal: async (conversationId, goal) => {
+    const body = await request(`/api/conversations/${conversationId}/goal`, {
+      method: "PUT",
+      body: JSON.stringify({ goal }),
+    });
+    return { conversation_id: readId(body, "conversation_id"), goal: readGoal(body) };
+  },
+  setPlanMode: async (conversationId, planMode) => {
+    const body = await request(`/api/conversations/${conversationId}/plan`, {
+      method: "PUT",
+      body: JSON.stringify({ plan_mode: planMode }),
+    });
+    return { conversation_id: readId(body, "conversation_id"), plan_mode: readPlanMode(body) };
   },
   getTask: async (taskId) => readTask(await request(`/api/tasks/${taskId}`)),
   // 生产后端暂未实现审批端点，stub：直接返回，不抛错，让 UI 能在预览模式下正常工作
@@ -403,6 +420,42 @@ function readId(body: unknown, field: string): string {
     throw new ApiRequestError("internal", "系统出错了，可以再发一次。", true, 200);
   }
   return value;
+}
+
+function readGoal(body: unknown): string {
+  const goal = recordOf(body).goal;
+  return typeof goal === "string" ? goal : "";
+}
+
+function readPlanMode(body: unknown): boolean {
+  return recordOf(body).plan_mode === true;
+}
+
+function readContext(body: unknown) {
+  const raw = recordOf(body).context;
+  if (!raw || typeof raw !== "object") return undefined;
+  const record = raw as Record<string, unknown>;
+  const used = record.used_tokens;
+  const limit = record.limit_tokens;
+  if (typeof used !== "number" || typeof limit !== "number" || limit <= 0) return undefined;
+  const source = record.limit_source === "provider" ? "provider" : "fallback";
+  return {
+    used_tokens: Math.max(0, Math.floor(used)),
+    limit_tokens: Math.floor(limit),
+    limit_source: source as "provider" | "fallback",
+    compressed: record.compressed === true,
+    parts: readContextParts(record.parts),
+  };
+}
+
+function readContextParts(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const record = item as Record<string, unknown>;
+    if (typeof record.name !== "string" || typeof record.tokens !== "number") return [];
+    return [{ name: record.name, tokens: Math.max(0, Math.floor(record.tokens)) }];
+  });
 }
 
 function readMessages(body: unknown): ConversationMessage[] {

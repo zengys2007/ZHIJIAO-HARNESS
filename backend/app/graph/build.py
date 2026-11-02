@@ -7,13 +7,12 @@ from app.graph.model_node import make_model_node
 from app.graph.state import GraphState
 from app.graph.tool_node import make_tool_node
 
-SYSTEM_LIMIT = 4000
 RECURSION_LIMIT = 20
 
 
 def build_graph(registry, complete, *, system: str):
-    if len(system) > SYSTEM_LIMIT:
-        raise ValueError("system prompt exceeds 4000 characters")
+    if system == "":
+        raise ValueError("system prompt must not be empty")
     graph = StateGraph(GraphState)
     graph.add_node("model", make_model_node(registry, complete, system))
     graph.add_node("tools", make_tool_node(registry))

@@ -14,6 +14,9 @@ def make_model_node(registry, complete, system: str):
                 state.get("current_user") or "",
                 state["messages"],
                 state.get("context_digest") or "",
+                state.get("context_summary") or "",
+                state.get("context_goal") or "",
+                bool(state.get("context_plan")),
             ),
             tools or None,
         )
@@ -29,6 +32,8 @@ def make_model_node(registry, complete, system: str):
             "messages": [{"role": "assistant", "content": result.content, "tool_calls": tool_calls}],
             "step_count": state["step_count"] + 1,
             "stop": "",
+            "prompt_tokens": result.prompt_tokens or 0,
+            "completion_tokens": result.completion_tokens or 0,
         }
 
     return model_node

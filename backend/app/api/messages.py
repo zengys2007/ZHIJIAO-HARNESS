@@ -15,6 +15,24 @@ def parse_create_conversation(body: object) -> None:
     raise RequestError("invalid conversation body")
 
 
+def parse_goal(body: object) -> str:
+    if not isinstance(body, dict) or set(body) != {"goal"}:
+        raise RequestError("invalid goal")
+    goal = body["goal"]
+    if not isinstance(goal, str):
+        raise RequestError("invalid goal")
+    return goal.strip()
+
+
+def parse_plan_mode(body: object) -> bool:
+    if not isinstance(body, dict) or set(body) != {"plan_mode"}:
+        raise RequestError("invalid plan")
+    value = body["plan_mode"]
+    if not isinstance(value, bool):
+        raise RequestError("invalid plan")
+    return value
+
+
 def parse_message(body: object) -> tuple[str, str | None]:
     if not isinstance(body, dict):
         raise RequestError("invalid message")
@@ -25,7 +43,7 @@ def parse_message(body: object) -> tuple[str, str | None]:
     if not isinstance(content, str):
         raise RequestError("invalid message")
     text = content.strip()
-    if text == "" or len(text) > 4000:
+    if text == "":
         raise RequestError("invalid message")
     if "llm_source" not in body:
         return text, None

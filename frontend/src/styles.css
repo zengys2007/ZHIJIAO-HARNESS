@@ -464,6 +464,19 @@ textarea {
   box-shadow: var(--shadow);
 }
 
+.composer-field {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.composer-field textarea {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
+
 .composer:focus-within {
   border-color: var(--accent);
   outline: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
@@ -1198,6 +1211,122 @@ button:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.composer-footer-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.context-usage {
+  position: relative;
+  display: inline-flex;
+}
+
+.context-ring {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--white);
+  color: var(--faint);
+  cursor: pointer;
+}
+
+.context-ring:hover,
+.context-ring[aria-expanded="true"] {
+  border-color: var(--accent);
+}
+
+.context-ring.is-warm { color: var(--accent-strong); }
+.context-ring.is-danger { color: var(--danger); }
+
+.context-ring-track,
+.context-ring-value {
+  fill: none;
+  stroke-width: 2;
+}
+
+.context-ring-track { stroke: var(--line); }
+
+.context-ring-value {
+  stroke: currentColor;
+  stroke-linecap: round;
+  transform: rotate(-90deg);
+  transform-origin: 8px 8px;
+}
+
+.context-popover {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 50;
+  width: 280px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--white);
+  box-shadow: var(--shadow);
+}
+
+.context-popover p {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.context-popover p + p { margin-top: 6px; }
+
+.context-note {
+  display: block;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.context-parts {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--line);
+}
+
+.context-parts li {
+  display: grid;
+  grid-template-columns: 92px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.context-parts li + li { margin-top: 6px; }
+
+.context-part-name {
+  color: var(--ink);
+  font-family: ui-monospace, monospace;
+}
+
+.context-part-bar {
+  height: 4px;
+  border-radius: 99px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.context-part-bar span {
+  display: block;
+  height: 100%;
+  background: currentColor;
+  color: var(--accent);
 }
 
 .approval-inline {
@@ -2048,6 +2177,18 @@ button:focus-visible {
   flex: none;
   font-size: 13px;
   color: var(--ink);
+}
+
+.composer-plan,
+.composer-goal {
+  flex: none;
+  margin-top: 8px;
+  color: var(--faint);
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.5;
+  user-select: none;
+  pointer-events: none;
 }
 
 /* ===== 轻提示 toast ===== */

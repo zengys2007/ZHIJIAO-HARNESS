@@ -35,7 +35,6 @@ from app.storage.protocol import (
 from app.tasks.states import transition as change_status
 
 EVENT_TYPES = {"user_message", "assistant_message", "tool_result", "artifact_published"}
-MAX_REQUEST_CHARS = 4000
 LOCAL_ADMIN = "local-admin"
 MAX_SEMESTER_NODES = 20
 MAX_UNIT_NODES = 30
@@ -62,6 +61,7 @@ class SqliteRepository:
         self._depth = 0
         self._create_schema()
         self._ensure_owner_column()
+        self._ensure_context_columns()
         self._adopt_unowned(admin_password)
 
     def create_user(self, username: str, display_name: str, password_hash: str) -> User:
@@ -144,7 +144,7 @@ class SqliteRepository:
             self._conn.execute("DELETE FROM remember_tokens WHERE token_hash = ?", (token_digest,))
 
     def create_task(self, raw_request: str, preset_hint: str | None) -> Task:
-        if not isinstance(raw_request, str) or raw_request.strip() == "" or len(raw_request) > MAX_REQUEST_CHARS:
+        if not isinstance(raw_request, str) or raw_request.strip() == "":
             raise InputError("invalid task request")
         if preset_hint is not None:
             raise InputError("invalid preset hint")
@@ -207,7 +207,7 @@ class SqliteRepository:
         if not isinstance(content, str):
             raise InputError("invalid task request")
         text = content.strip()
-        if text == "" or len(text) > MAX_REQUEST_CHARS:
+        if text == "":
             raise InputError("invalid task request")
         task_id = _ordered_id()
         now = _now()
@@ -252,6 +252,87 @@ class SqliteRepository:
             (conversation_id,),
         ).fetchall()
         return [(row["raw_request"], row["reply"] or "") for row in rows]
+
+    def succeeded_turn_records(self, conversation_id: str) -> list[tuple[str, str, str]]:
+        rows = self._conn.execute(
+            """
+            SELECT id, raw_request, reply FROM tasks
+            WHERE conversation_id = ? AND status = 'succeeded'
+            ORDER BY created_at, id
+            """,
+            (conversation_id,),
+        ).fetchall()
+        return [(row["id"], row["raw_request"], row["reply"] or "") for row in rows]
+
+    def get_context_state(self, conversation_id: str) -> tuple[str, str, int | None]:
+        row = self._conn.execute(
+            "SELECT context_summary, summary_until_task_id, context_used_tokens FROM conversations WHERE id = ?",
+            (conversation_id,),
+        ).fetchone()
+        if row is None:
+            return "", "", None
+        used = row["context_used_tokens"]
+        return row["context_summary"] or "", row["summary_until_task_id"] or "", used
+
+    def save_context_summary(self, conversation_id: str, summary: str, until_task_id: str) -> None:
+        with self.transaction():
+            self._conn.execute(
+                "UPDATE conversations SET context_summary = ?, summary_until_task_id = ? WHERE id = ?",
+                (summary, until_task_id, conversation_id),
+            )
+
+    def save_context_usage(self, conversation_id: str, used_tokens: int) -> None:
+        with self.transaction():
+            self._conn.execute(
+                "UPDATE conversations SET context_used_tokens = ? WHERE id = ?",
+                (used_tokens, conversation_id),
+            )
+
+    def get_goal(self, conversation_id: str) -> str:
+        row = self._conn.execute(
+            "SELECT goal FROM conversations WHERE id = ?",
+            (conversation_id,),
+        ).fetchone()
+        if row is None:
+            return ""
+        return row["goal"] or ""
+
+    def save_goal(self, conversation_id: str, owner_id: str, goal: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT owner_id FROM conversations WHERE id = ?",
+            (conversation_id,),
+        ).fetchone()
+        if row is None or row["owner_id"] != owner_id:
+            return None
+        with self.transaction():
+            self._conn.execute(
+                "UPDATE conversations SET goal = ? WHERE id = ?",
+                (goal, conversation_id),
+            )
+        return goal
+
+    def get_plan_mode(self, conversation_id: str) -> bool:
+        row = self._conn.execute(
+            "SELECT plan_mode FROM conversations WHERE id = ?",
+            (conversation_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        return bool(row["plan_mode"])
+
+    def save_plan_mode(self, conversation_id: str, owner_id: str, enabled: bool) -> bool | None:
+        row = self._conn.execute(
+            "SELECT owner_id FROM conversations WHERE id = ?",
+            (conversation_id,),
+        ).fetchone()
+        if row is None or row["owner_id"] != owner_id:
+            return None
+        with self.transaction():
+            self._conn.execute(
+                "UPDATE conversations SET plan_mode = ? WHERE id = ?",
+                (1 if enabled else 0, conversation_id),
+            )
+        return enabled
 
     def get_task_for_owner(self, task_id: str, owner_id: str) -> Task | None:
         row = self._conn.execute(
@@ -971,7 +1052,12 @@ class SqliteRepository:
             CREATE TABLE IF NOT EXISTS conversations (
               id TEXT PRIMARY KEY,
               created_at TEXT NOT NULL,
-              owner_id TEXT
+              owner_id TEXT,
+              context_summary TEXT NOT NULL DEFAULT '',
+              summary_until_task_id TEXT NOT NULL DEFAULT '',
+              context_used_tokens INTEGER,
+              goal TEXT NOT NULL DEFAULT '',
+              plan_mode INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS events (
               task_id TEXT NOT NULL,
@@ -1079,6 +1165,19 @@ class SqliteRepository:
         columns = {row[1] for row in self._conn.execute("PRAGMA table_info(conversations)")}
         if "owner_id" not in columns:
             self._conn.execute("ALTER TABLE conversations ADD COLUMN owner_id TEXT")
+
+    def _ensure_context_columns(self) -> None:
+        columns = {row[1] for row in self._conn.execute("PRAGMA table_info(conversations)")}
+        if "context_summary" not in columns:
+            self._conn.execute("ALTER TABLE conversations ADD COLUMN context_summary TEXT NOT NULL DEFAULT ''")
+        if "summary_until_task_id" not in columns:
+            self._conn.execute("ALTER TABLE conversations ADD COLUMN summary_until_task_id TEXT NOT NULL DEFAULT ''")
+        if "context_used_tokens" not in columns:
+            self._conn.execute("ALTER TABLE conversations ADD COLUMN context_used_tokens INTEGER")
+        if "goal" not in columns:
+            self._conn.execute("ALTER TABLE conversations ADD COLUMN goal TEXT NOT NULL DEFAULT ''")
+        if "plan_mode" not in columns:
+            self._conn.execute("ALTER TABLE conversations ADD COLUMN plan_mode INTEGER NOT NULL DEFAULT 0")
 
     def _adopt_unowned(self, admin_password: str | None) -> None:
         pending = self._conn.execute(

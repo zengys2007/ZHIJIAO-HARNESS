@@ -1,6 +1,3 @@
-export const CONTENT_LIMIT = 4000;
-export const INVALID_CONTENT_MESSAGE = "请把这句话写成 1 到 4000 字后再发送。";
-
 export function codePointLength(value: string): number {
   return [...value.trim()].length;
 }

@@ -82,12 +82,12 @@ def test_missing_conversation_is_not_found(tmp_path):
         pass
 
 
-def test_long_history_drops_the_oldest_whole_turn():
-    prior = [("旧" * 7000, "答" * 6000), ("新问题", "新回答")]
-    messages = assemble_model_input("系统", prior, "当前问题", [])
+def test_assemble_keeps_prior_turns_and_places_the_summary_before_them():
+    prior = [("旧" * 20, "答" * 20), ("新问题", "新回答")]
+    messages = assemble_model_input("系统", prior, "当前问题", [], context_summary="交接摘要")
     contents = [item["content"] for item in messages]
-    assert "旧" * 7000 not in contents
-    assert "新问题" in contents
+    assert contents[1] == "交接摘要"
+    assert "旧" * 20 in contents
     assert contents[-1] == "当前问题"
 
 

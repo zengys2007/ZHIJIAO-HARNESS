@@ -5,6 +5,7 @@ import urllib.error
 import urllib.request
 
 from app.llm.protocol import AssistantMessage, ModelError, ToolCall
+from app.llm.usage import parse_usage
 
 
 def make_complete(settings):
@@ -75,4 +76,10 @@ def _assistant_from_body(raw: bytes) -> AssistantMessage:
         if not isinstance(name, str) or name == "":
             raise ValueError("name")
         calls.append(ToolCall(id=str(item.get("id") or ""), name=name, arguments=arguments))
-    return AssistantMessage(content=content, tool_calls=calls)
+    prompt_tokens, completion_tokens = parse_usage(data)
+    return AssistantMessage(
+        content=content,
+        tool_calls=calls,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    )

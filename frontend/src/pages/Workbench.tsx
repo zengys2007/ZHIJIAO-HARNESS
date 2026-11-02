@@ -28,7 +28,7 @@ import {
 } from "../lib/attachments";
 import type { SessionSummary } from "../lib/sessions";
 import { CONTENT_LIMIT, codePointLength, conversationTitle } from "../lib/text";
-import type { ApprovalMode, AuthResult, AuthUser, ConversationApi, ConversationMessage, TaskSnapshot } from "../types/api";
+import type { ApprovalMode, AuthResult, AuthUser, ContextUsageInfo, ConversationApi, ConversationMessage, TaskSnapshot } from "../types/api";
 import type { GoalsApi } from "../types/goals";
 
 const PREVIEW_USER: AuthUser = {
@@ -43,6 +43,7 @@ import { AuthForm } from "../components/AuthForm";
 import { Composer } from "../components/Composer";
 import { GoalsView } from "./GoalsView";
 import { ModelPicker, type LlmSourceId } from "../components/ModelPicker";
+import { ContextUsage } from "../components/ContextUsage";
 import { PlusMenu } from "../components/PlusMenu";
 import { Settings, type SettingsSection } from "../components/Settings";
 import { Sidebar } from "../components/Sidebar";
@@ -121,6 +122,7 @@ function WorkbenchScreen({
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [cache, setCache] = useState<Record<string, ConversationMessage[]>>({});
+  const [contexts, setContexts] = useState<Record<string, ContextUsageInfo>>({});
   const [unsent, setUnsent] = useState<ConversationMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -132,6 +134,14 @@ function WorkbenchScreen({
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>("manual");
   /** 加号菜单未实现项的轻提示 */
   const [toast, setToast] = useState<string | null>(null);
+  /** 计划模式：原输入框内显示灰色 plan，再点一次退出 */
+  const [planMode, setPlanMode] = useState(false);
+  /** 目标内联编辑：原输入框显示灰色 goal，提交走 setGoal */
+  const [goalEditMode, setGoalEditMode] = useState(false);
+  /** 当前会话已保存的目标 */
+  const [goal, setGoal] = useState("");
+  /** 进入目标编辑前暂存的消息草稿 */
+  const draftBeforeGoalRef = useRef("");
   const toastTimerRef = useRef<number | null>(null);
   /** 本会话选用的模型来源；刷新可丢 */
   const [llmSource, setLlmSource] = useState<LlmSourceId | null>(null);
@@ -222,6 +232,9 @@ function WorkbenchScreen({
     setBanner(null);
     setPreview(false);
     setView("chat");
+    setGoal("");
+    setGoalEditMode(false);
+    setPlanMode(false);
   }, []);
 
   function adoptSession(session: AuthResult) {
@@ -343,6 +356,9 @@ function WorkbenchScreen({
       const response = await clientRef.current.getConversation(conversationId);
       if (!aliveRef.current) return response.messages;
       setCache((current) => ({ ...current, [conversationId]: response.messages }));
+      rememberContext(conversationId, response.context);
+      if (typeof response.goal === "string") setGoal(response.goal);
+      if (typeof response.plan_mode === "boolean") setPlanMode(response.plan_mode);
       return response.messages;
     } catch (error) {
       if (isUnauthenticated(error)) {
@@ -353,17 +369,107 @@ function WorkbenchScreen({
     }
   }
 
+  function enterGoalEdit() {
+    if (planMode) void persistPlanMode(false);
+    draftBeforeGoalRef.current = draft;
+    setDraft(goal);
+    setGoalEditMode(true);
+    setBanner(null);
+  }
+
+  async function persistPlanMode(enabled: boolean) {
+    if (enabled) exitGoalEdit();
+    setPlanMode(enabled);
+    setBanner(null);
+    if (!authenticated) return;
+    try {
+      let viewId = activeId;
+      if (!viewId) {
+        if (!enabled) return;
+        const created = await clientRef.current.createConversation();
+        viewId = created.conversation_id;
+        adopt(viewId, t("plan"), []);
+      }
+      const saved = await clientRef.current.setPlanMode(viewId, enabled);
+      if (!aliveRef.current) return;
+      setPlanMode(saved.plan_mode);
+      const conversation = await clientRef.current.getConversation(viewId);
+      if (!aliveRef.current) return;
+      rememberContext(viewId, conversation.context);
+      if (typeof conversation.goal === "string") setGoal(conversation.goal);
+    } catch (error) {
+      if (!aliveRef.current) return;
+      if (isUnauthenticated(error)) {
+        handleUnauthenticated();
+        return;
+      }
+      setPlanMode(!enabled);
+      setBanner(error instanceof Error ? error.message : t("systemError"));
+    }
+  }
+
+  function exitGoalEdit(restoreDraft = true) {
+    setGoalEditMode(false);
+    if (restoreDraft) setDraft(draftBeforeGoalRef.current);
+    draftBeforeGoalRef.current = "";
+  }
+
+  async function handleSaveGoal() {
+    if (!authenticated) {
+      setBanner(t("signInFirst"));
+      return;
+    }
+    if (busyRef.current) return;
+    const next = draft.trim();
+    if (!next && !activeId && !goal) {
+      exitGoalEdit();
+      return;
+    }
+
+    busyRef.current = true;
+    setSubmitting(true);
+    setBanner(null);
+    try {
+      let viewId = activeId;
+      if (!viewId) {
+        const created = await clientRef.current.createConversation();
+        viewId = created.conversation_id;
+        adopt(viewId, next || t("goal"), []);
+      }
+      const saved = await clientRef.current.setGoal(viewId, next);
+      if (!aliveRef.current) return;
+      setGoal(saved.goal);
+      const conversation = await clientRef.current.getConversation(viewId);
+      if (!aliveRef.current) return;
+      rememberContext(viewId, conversation.context);
+      exitGoalEdit();
+    } catch (error) {
+      if (!aliveRef.current) return;
+      if (isUnauthenticated(error)) {
+        handleUnauthenticated();
+        return;
+      }
+      setBanner(error instanceof Error ? error.message : t("systemError"));
+    } finally {
+      if (aliveRef.current) {
+        busyRef.current = false;
+        setSubmitting(false);
+      }
+    }
+  }
+
   async function handleSubmit() {
+    if (goalEditMode) {
+      await handleSaveGoal();
+      return;
+    }
     if (!authenticated) {
       setBanner(t("signInFirst"));
       return;
     }
     if (busyRef.current) return;
     const content = draft.trim();
-    if (codePointLength(content) < 1 || codePointLength(content) > CONTENT_LIMIT) {
-      setBanner(t("contentLimit"));
-      return;
-    }
+    if (content.length < 1) return;
 
     busyRef.current = true;
     setSubmitting(true);
@@ -387,6 +493,7 @@ function WorkbenchScreen({
       const conversation = await client.getConversation(viewId);
       if (!aliveRef.current) return;
       showMessages(viewId, applyTask(conversation.messages, task, content));
+      rememberContext(viewId, conversation.context);
       // 自动模式：对所有 pending 的 tool_call 批量批准
       if (approvalMode === "auto") {
         const autoCalls = conversation.messages.flatMap((m) =>
@@ -418,6 +525,7 @@ function WorkbenchScreen({
           const conversation = await previewApi.getConversation(viewId);
           if (!aliveRef.current) return;
           showMessages(viewId, applyTask(conversation.messages, task, content));
+          rememberContext(viewId, conversation.context);
           if (approvalMode === "auto") {
             const autoCalls = conversation.messages.flatMap((m) =>
               (m.tool_calls ?? []).filter((c) => c.approval_status === "pending").map((c) => ({
@@ -516,6 +624,11 @@ function WorkbenchScreen({
     return authenticated && !submitting;
   }
 
+  function rememberContext(id: string, context: ContextUsageInfo | undefined) {
+    if (!context) return;
+    setContexts((current) => ({ ...current, [id]: context }));
+  }
+
   function hasDragFiles(types: readonly string[] | DOMStringList | undefined): boolean {
     if (!types) return false;
     return Array.from(types as ArrayLike<string>).includes("Files");
@@ -534,11 +647,15 @@ function WorkbenchScreen({
     setDraft("");
     clearAttachments();
     setBanner(null);
+    setGoal("");
+    setGoalEditMode(false);
+    setPlanMode(false);
   }
 
   /** 一键任务草稿回填：切回对话并放进输入框，教师可微调后发送 */
   function handleTeachingDraft(draft: string) {
     setView("chat");
+    setGoalEditMode(false);
     setDraft(draft);
     setBanner(null);
   }
@@ -548,12 +665,16 @@ function WorkbenchScreen({
     if (busyRef.current || id === activeId) return;
     setBanner(null);
     setActiveId(id);
-    if (cache[id]) return;
+    setGoalEditMode(false);
+    setPlanMode(false);
     void clientRef.current
       .getConversation(id)
       .then((conversation) => {
         if (!aliveRef.current) return;
         setCache((current) => ({ ...current, [id]: conversation.messages }));
+        rememberContext(id, conversation.context);
+        setGoal(typeof conversation.goal === "string" ? conversation.goal : "");
+        setPlanMode(conversation.plan_mode === true);
       })
       .catch((error: unknown) => {
         if (!aliveRef.current) return;
@@ -721,6 +842,16 @@ function WorkbenchScreen({
                     onPickFile={() => fileInputRef.current?.click()}
                     onOpenModel={() => setModelPickerOpen(true)}
                     onOpenGoals={() => setView("goals")}
+                    planMode={planMode}
+                    onPlanModeChange={(enabled) => {
+                      void persistPlanMode(enabled);
+                    }}
+                    goal={goal}
+                    goalEditMode={goalEditMode}
+                    onGoalEditModeChange={(enabled) => {
+                      if (enabled) enterGoalEdit();
+                      else exitGoalEdit();
+                    }}
                     onUnavailable={() => showToast(t("unavailable"))}
                   />
                   {modelPickerOpen ? (
@@ -744,6 +875,18 @@ function WorkbenchScreen({
                   pendingCount={pendingCount}
                 />
               }
+              contextSlot={
+                <ContextUsage
+                  context={activeId ? contexts[activeId] : undefined}
+                  draft={goalEditMode ? "" : draft}
+                />
+              }
+              planMode={planMode}
+              onExitPlan={() => {
+                void persistPlanMode(false);
+              }}
+              goalEditMode={goalEditMode}
+              onExitGoal={() => exitGoalEdit()}
             />
             {toast !== null ? (
               <div className="toast-wrap" role="status">

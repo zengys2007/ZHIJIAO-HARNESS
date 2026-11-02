@@ -50,7 +50,7 @@ backend/
       protocol.py              name、description、参数 schema、execute
       registry.py              启动时的工具表。MVP 生产表为空
     prompts/
-      system.md                启动时读入。不写死工具名单
+      system.md                启动时读入。不按字数截断，计入上下文 token。不写死工具名单
     context/
       assemble.py              唯一组装模型输入的地方
     llm/

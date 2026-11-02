@@ -76,6 +76,29 @@ export type ConversationSummary = {
   created_at: string;
 };
 
+/** 用量圈里的一块。name 是 system、tools、context、summary、goal、plan、conversation。 */
+export type ContextPart = {
+  name: string;
+  tokens: number;
+};
+
+/** 会话上下文用量。limit_source 标明上限来自供应商还是 1M 兜底。 */
+export type ContextUsageInfo = {
+  used_tokens: number;
+  limit_tokens: number;
+  limit_source: "provider" | "fallback";
+  compressed: boolean;
+  parts?: ContextPart[];
+};
+
+export const EMPTY_CONTEXT: ContextUsageInfo = {
+  used_tokens: 0,
+  limit_tokens: 1_000_000,
+  limit_source: "fallback",
+  compressed: false,
+  parts: [],
+};
+
 export type ConversationApi = {
   createConversation(): Promise<{ conversation_id: string }>;
   sendMessage(
@@ -86,7 +109,15 @@ export type ConversationApi = {
   getConversation(conversationId: string): Promise<{
     conversation_id: string;
     messages: ConversationMessage[];
+    context?: ContextUsageInfo;
+    goal?: string;
+    plan_mode?: boolean;
   }>;
+  setGoal(conversationId: string, goal: string): Promise<{ conversation_id: string; goal: string }>;
+  setPlanMode(
+    conversationId: string,
+    planMode: boolean,
+  ): Promise<{ conversation_id: string; plan_mode: boolean }>;
   getTask(taskId: string): Promise<TaskSnapshot>;
   /** 手动审批：批准一个 pending 的工具调用，执行后 tool_result 会随 getConversation 返回 */
   approveCall(conversationId: string, taskId: string, callId: string): Promise<void>;

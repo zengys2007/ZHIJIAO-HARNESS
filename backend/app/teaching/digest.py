@@ -6,7 +6,6 @@
 from app.storage.protocol import TeachingData
 from app.teaching.insights import teaching_insights
 
-DIGEST_LIMIT = 6000
 DOC_EXCERPT_CHARS = 500
 STUDENT_LIST_LIMIT = 30
 
@@ -14,7 +13,7 @@ KIND_LABELS = {"homework": "作业", "quiz": "测验"}
 DOC_LABELS = {"lesson_plan": "教案", "rubric": "评分标准"}
 
 
-def build_digest(data: TeachingData) -> str:
+def build_digest(data: TeachingData, *, token_budget: int | None = None, count_tokens=None) -> str:
     if not data.classes:
         return ""
     header = (
@@ -33,16 +32,37 @@ def build_digest(data: TeachingData) -> str:
     if not body:
         return ""
     text = header + body
-    if len(text) > DIGEST_LIMIT:
-        # 超限时先丢教案/评分标准摘录，再丢学生名单明细，仍超则硬截断。
-        kept = [section for section in sections[:4] if section]
-        text = header + "\n".join(kept)
-    if len(text) > DIGEST_LIMIT:
-        kept = [sections[1], sections[2], sections[3]]
-        text = header + "\n".join(section for section in kept if section)
-    if len(text) > DIGEST_LIMIT:
-        text = text[:DIGEST_LIMIT]
-    return text
+    if token_budget is None or count_tokens is None or _tokens(text, count_tokens) <= token_budget:
+        return text
+    # 整段放不进输入预算时，先丢教案摘录，再丢学生名单，仍超则按 token 截断。
+    kept = [section for section in sections[:4] if section]
+    text = header + "\n".join(kept) if kept else ""
+    if text and _tokens(text, count_tokens) <= token_budget:
+        return text
+    kept = [section for section in (sections[1], sections[2], sections[3]) if section]
+    text = header + "\n".join(kept) if kept else ""
+    if not text or _tokens(text, count_tokens) <= token_budget:
+        return text
+    return _trim_tokens(text, count_tokens, token_budget)
+
+
+def _tokens(text: str, count_tokens) -> int:
+    return count_tokens([{"role": "system", "content": text}])
+
+
+def _trim_tokens(text: str, count_tokens, budget: int) -> str:
+    lo = 0
+    hi = len(text)
+    best = ""
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        piece = text[:mid]
+        if _tokens(piece, count_tokens) <= budget:
+            best = piece
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return best
 
 
 def _classes_section(data: TeachingData) -> str:

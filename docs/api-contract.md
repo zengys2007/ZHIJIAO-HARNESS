@@ -22,7 +22,7 @@
 {
   "error": {
     "code": "invalid_input",
-    "message": "请把这句话写成 1 到 4000 字后再发送。",
+    "message": "这句话是空的，或请求格式不对。",
     "retryable": false
   }
 }
@@ -67,7 +67,7 @@
 
 | 字段 | 规则 |
 | --- | --- |
-| `content` | 必填字符串。去掉首尾空白后为 1 到 4000 个码位 |
+| `content` | 必填字符串。去掉首尾空白后不能为空。不按 4000 字拒绝；上下文快满时压缩更早的对话，这一句仍放不下时模型看到交接摘要，原文仍保存 |
 
 同一会话已有 `pending` 或 `running` 任务时返回 409，不创建新任务。
 
@@ -92,6 +92,8 @@
 ```json
 {
   "conversation_id": "0123456789abcdef0123456789abcdef",
+  "goal": "",
+  "plan_mode": false,
   "messages": [
     {
       "task_id": "fedcba9876543210fedcba9876543210",
@@ -111,6 +113,10 @@
 }
 ```
 
+`goal` 是当前会话目标，去掉首尾空白后的原文。没有目标时是空字符串。它不写进 `messages`。
+
+`plan_mode` 是当前会话是否处于计划模式。为 `true` 时，每一轮发给模型的内容在目标之后挂一条固定说明，要求先写可审阅计划。它不写进 `messages`。
+
 `messages` 按 `created_at` 升序。同一任务里，教师消息在助手回复之前。
 
 | 字段 | 规则 |
@@ -125,7 +131,49 @@
 - 每个已创建的任务有一条 `user`。
 - 只有 `succeeded` 的任务另有一条 `assistant`。`pending`、`running`、`failed` 不出现助手消息。
 - `failed` 的 `user` 条目带 `error`。其它条目没有 `error`。
-- 不返回系统提示词、工具 schema、其它会话和模型请求原文。
+- 不返回系统提示词、工具 schema、其它会话、摘要正文和模型请求原文。
+
+同一响应带 `context`：
+
+| 字段 | 规则 |
+| --- | --- |
+| `used_tokens` | 最近一次模型请求的 `prompt_tokens + completion_tokens`。还没有请求时，用本地 tiktoken（`o200k_base`，每条消息加 4，整段加 3）估算已提交上下文 |
+| `limit_tokens` | 供应商 `GET /models` 里的 `max_model_len`、`context_length` 或 `context_window`。读不到时用 `CONTEXT_TOKEN_LIMIT`，默认 1000000 |
+| `limit_source` | `provider` 或 `fallback` |
+| `compressed` | 该会话是否已经把更早的成功轮压成摘要。摘要存在会话行上，任务里的原文仍全部返回 |
+| `parts` | 各块的本地 token 估算。`name` 为 `system`、`tools`、`context`、`summary`、`goal`、`plan`、`conversation`。`tokens` 为非负整数。系统策略、工具说明、教学资料、交接摘要、会话目标、计划模式说明和已成功对话分开计数。没有目标时 `goal` 为 0；计划模式关闭时 `plan` 为 0。输入框草稿由前端另计，不在这个数组里 |
+
+发送前的精确计数走 `POST {LLM_BASE_URL}/responses/input_tokens`。该接口不可用时，压缩判断使用同一套本地 tiktoken 计数。已用 token 达到窗口的 90%，或加上预留的 2000 输出 token 后放不下时，更早的成功轮换成交接摘要，最近不超过 20000 token 的整轮原文仍发给模型。摘要失败时，只从这一轮的模型输入里丢掉最旧的整轮，不删除已保存的任务。
+
+`PUT /api/conversations/{conversation_id}/goal`
+
+正文只有 `goal` 字符串。去掉首尾空白后保存。空字符串清除目标。不按字数拒绝。这条目标消息本身的 token 数超过 `limit_tokens - 2000` 时返回 400，`error.code` 为 `invalid_input`，`error.message` 为「这个目标占的上下文已经放不下输出，缩短后再保存。」已保存的目标保持不变。
+
+200：
+
+```json
+{
+  "conversation_id": "0123456789abcdef0123456789abcdef",
+  "goal": "把异分母加减讲通"
+}
+```
+
+目标挂在交接摘要之后、已成功对话之前，单独一条用户消息，前缀是「当前会话目标：」。自动压缩不把这条写进摘要。别人的会话返回 `not_found`。
+
+`PUT /api/conversations/{conversation_id}/plan`
+
+正文只有布尔字段 `plan_mode`。`true` 打开计划模式，`false` 关闭。别人的会话返回 `not_found`。
+
+200：
+
+```json
+{
+  "conversation_id": "0123456789abcdef0123456789abcdef",
+  "plan_mode": true
+}
+```
+
+计划模式打开时，在目标之后、已成功对话之前挂一条固定用户消息：「当前处于计划模式：先写出可审阅的计划，等教师确认后再生成具体成品；不要跳过计划直接交付。」自动压缩不把这条写进摘要；关闭后下一轮不再注入。
 
 失败的教师消息：
 
@@ -210,7 +258,7 @@
 
 | `error.code` | HTTP，仅当这次请求本身失败 | `retryable` | `error.message` |
 | --- | --- | --- | --- |
-| `invalid_input` | 400 | 否 | 请把这句话写成 1 到 4000 字后再发送。 |
+| `invalid_input` | 400 | 否 | 这句话是空的，或请求格式不对。 |
 | `unauthenticated` | 401 | 否 | 请先登录。 |
 | `not_found` | 404 | 否 | 没有找到这个会话或任务。 |
 | `conflict` | 409 | 否 | 上一条还在处理，请等它结束再发送。 |

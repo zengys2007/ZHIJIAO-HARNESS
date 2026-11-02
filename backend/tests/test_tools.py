@@ -1,7 +1,7 @@
 import pytest
 
 from app.tools.protocol import Tool
-from app.tools.registry import Registry, assert_projection_budget, production_registry
+from app.tools.registry import Registry, production_registry
 from app.tools.schema import argument_errors
 
 
@@ -10,7 +10,6 @@ def test_production_registry_has_no_preset_tools():
 
     assert registry.project() == []
     assert registry.get("use_preset") is None
-    assert_projection_budget(registry)
 
 
 def test_registry_rejects_duplicate_names():

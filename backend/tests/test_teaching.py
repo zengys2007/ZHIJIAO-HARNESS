@@ -83,7 +83,6 @@ def test_digest_contains_teaching_context_and_bounded_length():
     assert "第二单元测验" in text
     assert "约分" in text
     assert "先通分再比较" in text
-    assert len(text) <= 6000
 
 
 def test_digest_drops_document_excerpts_when_over_limit():
@@ -107,9 +106,12 @@ def test_digest_drops_document_excerpts_when_over_limit():
         documents=documents,
     )
 
-    text = build_digest(data)
+    text = build_digest(
+        data,
+        token_budget=2000,
+        count_tokens=lambda messages: sum(len(message.get("content") or "") for message in messages),
+    )
 
-    assert len(text) <= 6000
     assert "教案19" not in text
     assert "三年二班" in text
 

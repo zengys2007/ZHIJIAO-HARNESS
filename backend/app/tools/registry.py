@@ -1,10 +1,6 @@
 """启动时固定的工具表，并投影给模型。"""
 
-import json
-
 from app.tools.protocol import Tool
-
-PROJECTION_LIMIT = 4000
 
 
 class Registry:
@@ -26,9 +22,3 @@ class Registry:
 
 def production_registry() -> Registry:
     return Registry([])
-
-
-def assert_projection_budget(registry: Registry) -> None:
-    text = json.dumps(registry.project(), ensure_ascii=False)
-    if len(text) > PROJECTION_LIMIT:
-        raise ValueError("tool schema exceeds 4000 characters")

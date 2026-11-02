@@ -12,6 +12,7 @@ class Settings:
     llm_api_key: str = ""
     llm_model: str = ""
     llm_timeout_seconds: int = 60
+    context_token_limit: int = 1_000_000
     auth_secret: str = ""
     auth_admin_password: str = ""
 
@@ -88,12 +89,20 @@ def load_settings() -> Settings:
         timeout = int(timeout_raw)
     except ValueError as exc:
         raise RuntimeError("LLM_TIMEOUT_SECONDS must be an integer") from exc
+    limit_raw = os.environ.get("CONTEXT_TOKEN_LIMIT", "1000000")
+    try:
+        context_limit = int(limit_raw)
+    except ValueError as exc:
+        raise RuntimeError("CONTEXT_TOKEN_LIMIT must be an integer") from exc
+    if context_limit <= 0:
+        raise RuntimeError("CONTEXT_TOKEN_LIMIT must be a positive integer")
     return Settings(
         data_dir=Path(raw).expanduser().resolve(),
         llm_base_url=base_url,
         llm_api_key=api_key,
         llm_model=model,
         llm_timeout_seconds=timeout,
+        context_token_limit=context_limit,
         auth_secret=auth_secret,
         auth_admin_password=os.environ.get("AUTH_ADMIN_PASSWORD", ""),
     )
