@@ -41,10 +41,12 @@ export const httpApi: ConversationApi = {
     const body = await request("/api/conversations", { method: "POST" });
     return { conversation_id: readId(body, "conversation_id") };
   },
-  sendMessage: async (conversationId, content) => {
+  sendMessage: async (conversationId, content, options) => {
+    const payload: { content: string; llm_source?: "local" | "dotenv" } = { content };
+    if (options?.llmSource) payload.llm_source = options.llmSource;
     const body = await request(`/api/conversations/${conversationId}/messages`, {
       method: "POST",
-      body: JSON.stringify({ content }),
+      body: JSON.stringify(payload),
     });
     return {
       conversation_id: readId(body, "conversation_id"),

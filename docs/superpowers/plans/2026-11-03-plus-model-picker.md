@@ -43,9 +43,9 @@
 - Produces: `parse_message(body) -> tuple[str, str | None]`；`llm_source in {None, "local", "dotenv"}`
 - Consumes: `process_llm()`, `dotenv_llm(env_file)`, `make_complete`, `build_graph`, `load_system_prompt`
 
-- [ ] **Step 1:** 测试 — body 仅 content 仍 202；带 `llm_source:"dotenv"` 且 .env 齐全时用 dotenv 的 model（可用 mock complete 记录 settings）；缺 key 或非法 source → 400；多余键 → 400。
-- [ ] **Step 2:** 改 `parse_message`；`create_message` 解析 source、校验配置、本轮 `build_graph` 传入线程。
-- [ ] **Step 3:** 跑相关 pytest 通过并提交。
+- [x] **Step 1:** 测试 — body 仅 content 仍 202；带 `llm_source:"dotenv"` 且 .env 齐全时用 dotenv 的 model（可用 mock complete 记录 settings）；缺 key 或非法 source → 400；多余键 → 400。
+- [x] **Step 2:** 改 `parse_message`；`create_message` 解析 source、校验配置、本轮 `build_graph` 传入线程。
+- [x] **Step 3:** 跑相关 pytest 通过并提交。
 
 ---
 
@@ -63,13 +63,13 @@
 - `sendMessage(id, content, options?: { llmSource?: "local" | "dotenv" })`
 - `ModelPicker`: `{ open, selected, onSelect, onClose, loadSources }`
 
-- [ ] **Step 1:** 改测试 — 加号→模型出现「搜索模型」与分组；勾选；发送 body 含 `llm_source`；不再断言打开设置 API/MCPs。
-- [ ] **Step 2:** 实现 ModelPicker、文案、样式；Workbench 接线；http/preview 传参。
-- [ ] **Step 3:** `npx vitest` 相关 + `npx tsc --noEmit`；提交。
+- [x] **Step 1:** 改测试 — 加号→模型出现「搜索模型」与分组；勾选；发送 body 含 `llm_source`；不再断言打开设置 API/MCPs。
+- [x] **Step 2:** 实现 ModelPicker、文案、样式；Workbench 接线；http/preview 传参。
+- [x] **Step 3:** `npx vitest` 相关 + `npx tsc --noEmit`；提交。
 
 ---
 
 ### Task 3: 收尾核对
 
-- [ ] 手动或测试：未选 source 发送仍成功；只配一端时浮层只显示一组。
-- [ ] 更新本 plan 复选框；必要时补一句架构文档交叉引用（可选，非必须）。
+- [x] 手动或测试：未选 source 发送仍成功；只配一端时浮层只显示一组。
+- [x] 更新本 plan 复选框；必要时补一句架构文档交叉引用（可选，非必须）。

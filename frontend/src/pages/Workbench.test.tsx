@@ -329,9 +329,17 @@ describe("工作台", () => {
     expect(screen.getByText("板书.png")).toBeTruthy();
   });
 
-  it("加号菜单：模型项打开设置中的 API/MCPs 配置", async () => {
+  it("加号菜单：模型项打开模型浮层，勾选后发送带 llm_source", async () => {
     const user = userEvent.setup();
+    const sent: Array<{ content: string; options?: { llmSource?: "local" | "dotenv" } }> = [];
+    const api = immediateApi();
+    const originalSend = api.sendMessage.bind(api);
+    api.sendMessage = async (conversationId, content, options) => {
+      sent.push({ content, options });
+      return originalSend(conversationId, content, options);
+    };
     renderLoggedIn({
+      api,
       loadSources: async () => ({
         environment: { base_url: "http://env.test/v1", model: "env-model", has_api_key: true },
         dotenv: { base_url: "http://file.test/v1", model: "file-model", has_api_key: true },
@@ -344,9 +352,19 @@ describe("工作台", () => {
     await user.click(screen.getByRole("menuitem", { name: /模型/ }));
 
     expect(screen.queryByRole("menu")).toBeNull();
-    expect(screen.getByRole("navigation", { name: "设置" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "API/MCPs配置" }).getAttribute("aria-current")).toBe("page");
-    expect(screen.getByRole("heading", { name: "API/MCPs配置" })).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "模型" })).toBeTruthy();
+    expect(screen.getByPlaceholderText("搜索模型...")).toBeTruthy();
+    expect(await screen.findByRole("option", { name: /env-model/ })).toBeTruthy();
+    expect(screen.getByRole("option", { name: /file-model/ })).toBeTruthy();
+
+    await user.click(screen.getByRole("option", { name: /file-model/ }));
+    expect(screen.queryByRole("dialog", { name: "模型" })).toBeNull();
+
+    await user.type(screen.getByLabelText("消息"), "用文件模型");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+    expect(sent.some((item) => item.content === "用文件模型" && item.options?.llmSource === "dotenv")).toBe(
+      true,
+    );
   });
 
   it("登录界面：一键填充演示账号（只填充不登录）", async () => {

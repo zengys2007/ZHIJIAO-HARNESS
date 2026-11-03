@@ -81,6 +81,7 @@ export type ConversationApi = {
   sendMessage(
     conversationId: string,
     content: string,
+    options?: { llmSource?: "local" | "dotenv" },
   ): Promise<{ conversation_id: string; task_id: string; status: "pending" }>;
   getConversation(conversationId: string): Promise<{
     conversation_id: string;

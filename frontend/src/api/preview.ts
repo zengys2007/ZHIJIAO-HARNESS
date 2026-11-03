@@ -107,7 +107,7 @@ export function createPreviewApi(now: () => string = timestamp): ConversationApi
       threads.set(conversationId, { messages: [], approvals: {} });
       return { conversation_id: conversationId };
     },
-    async sendMessage(conversationId, content) {
+    async sendMessage(conversationId, content, _options) {
       const thread = getThread(conversationId);
       if (!thread) throw new Error("会话不存在");
       const taskId = randomId();

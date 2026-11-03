@@ -42,6 +42,7 @@ import { AttachmentBar } from "../components/AttachmentBar";
 import { AuthForm } from "../components/AuthForm";
 import { Composer } from "../components/Composer";
 import { GoalsView } from "./GoalsView";
+import { ModelPicker, type LlmSourceId } from "../components/ModelPicker";
 import { PlusMenu } from "../components/PlusMenu";
 import { Settings, type SettingsSection } from "../components/Settings";
 import { Sidebar } from "../components/Sidebar";
@@ -132,6 +133,9 @@ function WorkbenchScreen({
   /** 加号菜单未实现项的轻提示 */
   const [toast, setToast] = useState<string | null>(null);
   const toastTimerRef = useRef<number | null>(null);
+  /** 本会话选用的模型来源；刷新可丢 */
+  const [llmSource, setLlmSource] = useState<LlmSourceId | null>(null);
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
   /** 输入区草稿附件（本阶段不上传） */
   const [attachments, setAttachments] = useState<DraftAttachment[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -374,7 +378,11 @@ function WorkbenchScreen({
     try {
       viewId = await ensureConversation(viewId, content, shown);
       const client = clientRef.current;
-      const accepted = await client.sendMessage(viewId, content);
+      const accepted = await client.sendMessage(
+        viewId,
+        content,
+        llmSource ? { llmSource } : undefined,
+      );
       const task = await pollTaskUntilAssistant(client, accepted.task_id);
       const conversation = await client.getConversation(viewId);
       if (!aliveRef.current) return;
@@ -401,7 +409,11 @@ function WorkbenchScreen({
       if (!api && error instanceof DisconnectError) {
         try {
           viewId = await usePreview(content, shown);
-          const accepted = await previewApi.sendMessage(viewId, content);
+          const accepted = await previewApi.sendMessage(
+            viewId,
+            content,
+            llmSource ? { llmSource } : undefined,
+          );
           const task = await pollTaskUntilAssistant(previewApi, accepted.task_id);
           const conversation = await previewApi.getConversation(viewId);
           if (!aliveRef.current) return;
@@ -702,17 +714,28 @@ function WorkbenchScreen({
                 />
               }
               leadingSlot={
-                <PlusMenu
-                  approvalMode={approvalMode}
-                  onApprovalModeChange={setApprovalMode}
-                  onPickFile={() => fileInputRef.current?.click()}
-                  onOpenModel={() => {
-                    setSettingsSection("connections");
-                    setView("settings");
-                  }}
-                  onOpenGoals={() => setView("goals")}
-                  onUnavailable={() => showToast(t("unavailable"))}
-                />
+                <div className="plus-inline">
+                  <PlusMenu
+                    approvalMode={approvalMode}
+                    onApprovalModeChange={setApprovalMode}
+                    onPickFile={() => fileInputRef.current?.click()}
+                    onOpenModel={() => setModelPickerOpen(true)}
+                    onOpenGoals={() => setView("goals")}
+                    onUnavailable={() => showToast(t("unavailable"))}
+                  />
+                  {modelPickerOpen ? (
+                    <ModelPicker
+                      selected={llmSource}
+                      onSelect={(source) => {
+                        setLlmSource(source);
+                        setModelPickerOpen(false);
+                      }}
+                      onClose={() => setModelPickerOpen(false)}
+                      loadSources={loadSources}
+                      onLoadError={() => showToast(t("modelListFailed"))}
+                    />
+                  ) : null}
+                </div>
               }
               approvalSegment={
                 <ApprovalBar
