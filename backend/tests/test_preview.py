@@ -69,7 +69,7 @@ def test_web_framework_and_sqlite_stay_in_their_modules():
     assert "checkpointer" not in build
 
 
-def _idle_complete(messages, tools):
+def _idle_complete(messages, tools, sink=None):
     from app.llm.protocol import AssistantMessage
 
     return AssistantMessage(content="好", tool_calls=[])

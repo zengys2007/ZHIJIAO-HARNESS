@@ -5,6 +5,8 @@ import {
   httpApi,
   getCurrentUser as httpGetCurrentUser,
   listConversations as httpListConversations,
+  pinConversation as httpPinConversation,
+  deleteConversation as httpDeleteConversation,
   login as httpLogin,
   logout as httpLogout,
   probeLlm,
@@ -27,9 +29,17 @@ import {
   type DraftAttachment,
 } from "../lib/attachments";
 import type { SessionSummary } from "../lib/sessions";
-import { CONTENT_LIMIT, codePointLength, conversationTitle } from "../lib/text";
-import type { ApprovalMode, AuthResult, AuthUser, ContextUsageInfo, ConversationApi, ConversationMessage, TaskSnapshot } from "../types/api";
+import { followTask } from "../lib/stream";
+import { conversationTitle } from "../lib/text";
+import type { ApprovalMode, AuthResult, AuthUser, ContextUsageInfo, ConversationApi, ConversationMessage, PlanStatus, TaskSnapshot } from "../types/api";
 import type { GoalsApi } from "../types/goals";
+
+type ConversationMode = {
+  askMode: boolean;
+  planMode: boolean;
+  planStatus: PlanStatus;
+  planBody: string;
+};
 
 const PREVIEW_USER: AuthUser = {
   user_id: "00000000000000000000000000000000",
@@ -60,6 +70,8 @@ type Props = {
   getCurrentUser?: () => Promise<AuthUser | null>;
   /** 测试注入：列出当前用户的会话。默认走后端 */
   listConversationsAuth?: () => Promise<import("../types/api").ConversationSummary[]>;
+  pinConversation?: (id: string, pinned: boolean) => Promise<void>;
+  deleteConversation?: (id: string) => Promise<void>;
   /** 测试注入：登录。返回用户，或附带记住此设备的令牌 */
   loginFn?: (username: string, password: string) => Promise<AuthUser | AuthResult>;
   /** 测试注入：注册 */
@@ -99,6 +111,8 @@ function WorkbenchScreen({
   loadSources = loadLlmSources,
   getCurrentUser: getCurrentUserImpl = httpGetCurrentUser,
   listConversationsAuth: listConversationsImpl = httpListConversations,
+  pinConversation: pinConversationImpl = httpPinConversation,
+  deleteConversation: deleteConversationImpl = httpDeleteConversation,
   loginFn = httpLogin,
   registerFn = httpRegister,
   resumeFn = httpResume,
@@ -136,12 +150,13 @@ function WorkbenchScreen({
   const [toast, setToast] = useState<string | null>(null);
   /** 计划模式：原输入框内显示灰色 plan，再点一次退出 */
   const [planMode, setPlanMode] = useState(false);
-  /** 目标内联编辑：原输入框显示灰色 goal，提交走 setGoal */
-  const [goalEditMode, setGoalEditMode] = useState(false);
-  /** 当前会话已保存的目标 */
-  const [goal, setGoal] = useState("");
-  /** 进入目标编辑前暂存的消息草稿 */
-  const draftBeforeGoalRef = useRef("");
+  const [planStatus, setPlanStatus] = useState<PlanStatus>("off");
+  const [planBody, setPlanBody] = useState("");
+  const activeIdRef = useRef<string | null>(null);
+  const modesRef = useRef<Record<string, ConversationMode>>({});
+  activeIdRef.current = activeId;
+  /** 提问模式：原输入框内显示灰色 ask，再点一次退出 */
+  const [askMode, setAskMode] = useState(false);
   const toastTimerRef = useRef<number | null>(null);
   /** 本会话选用的模型来源；刷新可丢 */
   const [llmSource, setLlmSource] = useState<LlmSourceId | null>(null);
@@ -216,7 +231,11 @@ function WorkbenchScreen({
       if (err instanceof DisconnectError) return;
       throw err;
     }
-    const next: SessionSummary[] = list.map((c) => ({ id: c.conversation_id, title: c.title }));
+    const next: SessionSummary[] = list.map((c) => ({
+      id: c.conversation_id,
+      title: c.title,
+      pinned: c.pinned,
+    }));
     if (!aliveRef.current) return;
     setSessions(next);
   }
@@ -232,9 +251,8 @@ function WorkbenchScreen({
     setBanner(null);
     setPreview(false);
     setView("chat");
-    setGoal("");
-    setGoalEditMode(false);
-    setPlanMode(false);
+    modesRef.current = {};
+    resetDraftMode();
   }, []);
 
   function adoptSession(session: AuthResult) {
@@ -318,19 +336,31 @@ function WorkbenchScreen({
     setUnsent([]);
   }
 
-  function adopt(id: string, content: string, shown: ConversationMessage[]) {
-    const entry: SessionSummary = { id, title: conversationTitle(content) };
-    setSessions((current) => [entry, ...current.filter((item) => item.id !== id)]);
+  function adopt(id: string, shown: ConversationMessage[]) {
+    const entry: SessionSummary = { id, title: t("newChat"), pinned: false };
+    setSessions((current) => {
+      const rest = current.filter((item) => item.id !== id);
+      const pinnedItems = rest.filter((item) => item.pinned);
+      const unpinned = rest.filter((item) => !item.pinned);
+      return [...pinnedItems, entry, ...unpinned];
+    });
     setActiveId(id);
     setCache((current) => ({ ...current, [id]: shown }));
     setUnsent([]);
+  }
+
+  function rememberSessionTitle(id: string, shown: ConversationMessage[]) {
+    const first = shown.find((message) => message.role === "user" && message.status === "succeeded");
+    if (!first) return;
+    const title = conversationTitle(first.content);
+    setSessions((current) => current.map((item) => (item.id === id ? { ...item, title } : item)));
   }
 
   async function ensureConversation(currentId: string | null, content: string, shown: ConversationMessage[]) {
     if (currentId) return currentId;
     try {
       const created = await clientRef.current.createConversation();
-      adopt(created.conversation_id, content, shown);
+      adopt(created.conversation_id, shown);
       return created.conversation_id;
     } catch (error) {
       if (isUnauthenticated(error)) {
@@ -342,11 +372,11 @@ function WorkbenchScreen({
     }
   }
 
-  async function usePreview(content: string, shown: ConversationMessage[]) {
+  async function usePreview(_content: string, shown: ConversationMessage[]) {
     clientRef.current = previewApi;
     setPreview(true);
     const created = await previewApi.createConversation();
-    adopt(created.conversation_id, content, shown);
+    adopt(created.conversation_id, shown);
     return created.conversation_id;
   }
 
@@ -356,9 +386,9 @@ function WorkbenchScreen({
       const response = await clientRef.current.getConversation(conversationId);
       if (!aliveRef.current) return response.messages;
       setCache((current) => ({ ...current, [conversationId]: response.messages }));
+      rememberSessionTitle(conversationId, response.messages);
       rememberContext(conversationId, response.context);
-      if (typeof response.goal === "string") setGoal(response.goal);
-      if (typeof response.plan_mode === "boolean") setPlanMode(response.plan_mode);
+      applyMeta(response, conversationId);
       return response.messages;
     } catch (error) {
       if (isUnauthenticated(error)) {
@@ -369,17 +399,14 @@ function WorkbenchScreen({
     }
   }
 
-  function enterGoalEdit() {
-    if (planMode) void persistPlanMode(false);
-    draftBeforeGoalRef.current = draft;
-    setDraft(goal);
-    setGoalEditMode(true);
-    setBanner(null);
-  }
-
-  async function persistPlanMode(enabled: boolean) {
-    if (enabled) exitGoalEdit();
-    setPlanMode(enabled);
+  async function persistAskMode(enabled: boolean) {
+    const previousPlan = planMode;
+    const previousStatus = planStatus;
+    setAskMode(enabled);
+    if (enabled) {
+      setPlanMode(false);
+      setPlanStatus("off");
+    }
     setBanner(null);
     if (!authenticated) return;
     try {
@@ -388,61 +415,97 @@ function WorkbenchScreen({
         if (!enabled) return;
         const created = await clientRef.current.createConversation();
         viewId = created.conversation_id;
-        adopt(viewId, t("plan"), []);
+        adopt(viewId, []);
       }
-      const saved = await clientRef.current.setPlanMode(viewId, enabled);
+      const saved = await clientRef.current.setAskMode(viewId, enabled);
       if (!aliveRef.current) return;
-      setPlanMode(saved.plan_mode);
+      applyMode(saved);
       const conversation = await clientRef.current.getConversation(viewId);
       if (!aliveRef.current) return;
-      rememberContext(viewId, conversation.context);
-      if (typeof conversation.goal === "string") setGoal(conversation.goal);
+      applyMeta(conversation, viewId);
     } catch (error) {
       if (!aliveRef.current) return;
       if (isUnauthenticated(error)) {
         handleUnauthenticated();
         return;
       }
-      setPlanMode(!enabled);
+      setAskMode(!enabled);
+      setPlanMode(previousPlan);
+      setPlanStatus(previousStatus);
       setBanner(error instanceof Error ? error.message : t("systemError"));
     }
   }
 
-  function exitGoalEdit(restoreDraft = true) {
-    setGoalEditMode(false);
-    if (restoreDraft) setDraft(draftBeforeGoalRef.current);
-    draftBeforeGoalRef.current = "";
+  async function persistPlanMode(enabled: boolean) {
+    const previousAsk = askMode;
+    setPlanMode(enabled);
+    setPlanStatus(enabled ? "draft" : "off");
+    if (enabled) setAskMode(false);
+    setBanner(null);
+    if (!authenticated) return;
+    try {
+      let viewId = activeId;
+      if (!viewId) {
+        if (!enabled) return;
+        const created = await clientRef.current.createConversation();
+        viewId = created.conversation_id;
+        adopt(viewId, []);
+      }
+      const saved = await clientRef.current.setPlanMode(viewId, enabled);
+      if (!aliveRef.current) return;
+      applyMode(saved);
+      const conversation = await clientRef.current.getConversation(viewId);
+      if (!aliveRef.current) return;
+      applyMeta(conversation, viewId);
+    } catch (error) {
+      if (!aliveRef.current) return;
+      if (isUnauthenticated(error)) {
+        handleUnauthenticated();
+        return;
+      }
+      setAskMode(previousAsk);
+      setPlanMode(!enabled);
+      setPlanStatus(!enabled ? "draft" : "off");
+      setBanner(error instanceof Error ? error.message : t("systemError"));
+    }
   }
 
-  async function handleSaveGoal() {
+  async function handleSubmit() {
+    const content = draft.trim();
+    if (content.length < 1) return;
+    await sendContent(content);
+  }
+
+  async function handleGenerate(choice: { title: string; text: string } | null) {
     if (!authenticated) {
       setBanner(t("signInFirst"));
       return;
     }
     if (busyRef.current) return;
-    const next = draft.trim();
-    if (!next && !activeId && !goal) {
-      exitGoalEdit();
+    const text = (choice?.text ?? planBody).trim();
+    if (!text) {
+      setBanner(t("planEmpty"));
       return;
     }
-
     busyRef.current = true;
     setSubmitting(true);
     setBanner(null);
+    let ready = false;
     try {
       let viewId = activeId;
       if (!viewId) {
         const created = await clientRef.current.createConversation();
         viewId = created.conversation_id;
-        adopt(viewId, next || t("goal"), []);
+        adopt(viewId, []);
       }
-      const saved = await clientRef.current.setGoal(viewId, next);
+      await clientRef.current.savePlanBody(viewId, text);
       if (!aliveRef.current) return;
-      setGoal(saved.goal);
-      const conversation = await clientRef.current.getConversation(viewId);
-      if (!aliveRef.current) return;
-      rememberContext(viewId, conversation.context);
-      exitGoalEdit();
+      if (planStatus !== "approved") {
+        const approved = await clientRef.current.generatePlan(viewId);
+        if (!aliveRef.current) return;
+        applyMode(approved);
+      }
+      ready = true;
     } catch (error) {
       if (!aliveRef.current) return;
       if (isUnauthenticated(error)) {
@@ -451,25 +514,33 @@ function WorkbenchScreen({
       }
       setBanner(error instanceof Error ? error.message : t("systemError"));
     } finally {
-      if (aliveRef.current) {
-        busyRef.current = false;
-        setSubmitting(false);
-      }
+      busyRef.current = false;
+      if (aliveRef.current) setSubmitting(false);
+    }
+    if (ready) {
+      const message = choice ? `${t("planGenerateMessage")}\n\n选用：${choice.title}` : t("planGenerateMessage");
+      await sendContent(message);
     }
   }
 
-  async function handleSubmit() {
-    if (goalEditMode) {
-      await handleSaveGoal();
-      return;
-    }
+  function applyMode(saved: {
+    ask_mode?: boolean;
+    plan_mode: boolean;
+    plan_status: PlanStatus;
+    plan_body: string;
+  }) {
+    if (typeof saved.ask_mode === "boolean") setAskMode(saved.ask_mode);
+    setPlanMode(saved.plan_mode);
+    setPlanStatus(saved.plan_status);
+    setPlanBody(saved.plan_body);
+  }
+
+  async function sendContent(content: string) {
     if (!authenticated) {
       setBanner(t("signInFirst"));
       return;
     }
     if (busyRef.current) return;
-    const content = draft.trim();
-    if (content.length < 1) return;
 
     busyRef.current = true;
     setSubmitting(true);
@@ -489,11 +560,18 @@ function WorkbenchScreen({
         content,
         llmSource ? { llmSource } : undefined,
       );
-      const task = await pollTaskUntilAssistant(client, accepted.task_id);
+      const task = client.streamTask
+        ? await followTask(client, accepted.task_id, (text) => {
+            if (!aliveRef.current) return;
+            showMessages(viewId, streamingMessages(shown, accepted.task_id, content, text));
+          })
+        : await pollTaskUntilAssistant(client, accepted.task_id);
       const conversation = await client.getConversation(viewId);
       if (!aliveRef.current) return;
-      showMessages(viewId, applyTask(conversation.messages, task, content));
-      rememberContext(viewId, conversation.context);
+      const settled = applyTask(conversation.messages, task, content);
+      showMessages(viewId, settled);
+      rememberSessionTitle(viewId, settled);
+      applyMeta(conversation, viewId);
       // 自动模式：对所有 pending 的 tool_call 批量批准
       if (approvalMode === "auto") {
         const autoCalls = conversation.messages.flatMap((m) =>
@@ -524,8 +602,10 @@ function WorkbenchScreen({
           const task = await pollTaskUntilAssistant(previewApi, accepted.task_id);
           const conversation = await previewApi.getConversation(viewId);
           if (!aliveRef.current) return;
-          showMessages(viewId, applyTask(conversation.messages, task, content));
-          rememberContext(viewId, conversation.context);
+          const settled = applyTask(conversation.messages, task, content);
+          showMessages(viewId, settled);
+          rememberSessionTitle(viewId, settled);
+          applyMeta(conversation, viewId);
           if (approvalMode === "auto") {
             const autoCalls = conversation.messages.flatMap((m) =>
               (m.tool_calls ?? []).filter((c) => c.approval_status === "pending").map((c) => ({
@@ -624,6 +704,64 @@ function WorkbenchScreen({
     return authenticated && !submitting;
   }
 
+  function currentMode(): ConversationMode {
+    return { askMode, planMode, planStatus, planBody };
+  }
+
+  function showMode(mode: ConversationMode) {
+    setAskMode(mode.askMode);
+    setPlanMode(mode.planMode);
+    setPlanStatus(mode.planStatus);
+    setPlanBody(mode.planBody);
+  }
+
+  function rememberMode(id: string | null, mode: ConversationMode) {
+    if (!id) return;
+    modesRef.current[id] = mode;
+  }
+
+  function modeFromMeta(conversation: {
+    ask_mode?: boolean;
+    plan_mode?: boolean;
+    plan_status?: PlanStatus;
+    plan_body?: string;
+  }): ConversationMode {
+    const status: PlanStatus =
+      conversation.plan_status === "off" ||
+      conversation.plan_status === "draft" ||
+      conversation.plan_status === "approved"
+        ? conversation.plan_status
+        : conversation.plan_mode
+          ? "draft"
+          : "off";
+    return {
+      askMode: conversation.ask_mode === true,
+      planMode: status === "draft",
+      planStatus: status,
+      planBody: typeof conversation.plan_body === "string" ? conversation.plan_body : "",
+    };
+  }
+
+  function resetDraftMode() {
+    showMode({ askMode: false, planMode: false, planStatus: "off", planBody: "" });
+  }
+
+  function applyMeta(
+    conversation: {
+      ask_mode?: boolean;
+      plan_mode?: boolean;
+      plan_status?: PlanStatus;
+      plan_body?: string;
+      context?: ContextUsageInfo;
+    },
+    conversationId?: string,
+  ) {
+    const mode = modeFromMeta(conversation);
+    if (conversationId) rememberMode(conversationId, mode);
+    if (!conversationId || activeIdRef.current === conversationId) showMode(mode);
+    if (conversationId) rememberContext(conversationId, conversation.context);
+  }
+
   function rememberContext(id: string, context: ContextUsageInfo | undefined) {
     if (!context) return;
     setContexts((current) => ({ ...current, [id]: context }));
@@ -639,23 +777,85 @@ function WorkbenchScreen({
     setDropActive(false);
   }
 
-  function handleNew() {
-    if (busyRef.current) return;
+  function showBlankConversation() {
+    rememberMode(activeIdRef.current, currentMode());
+    activeIdRef.current = null;
     setView("chat");
     setActiveId(null);
     setUnsent([]);
     setDraft("");
     clearAttachments();
     setBanner(null);
-    setGoal("");
-    setGoalEditMode(false);
-    setPlanMode(false);
+    resetDraftMode();
+  }
+
+  async function handlePin(id: string, pinned: boolean) {
+    try {
+      await pinConversationImpl(id, pinned);
+    } catch (error) {
+      if (isUnauthenticated(error)) {
+        handleUnauthenticated();
+        return;
+      }
+      setBanner(error instanceof Error ? error.message : t("systemError"));
+      return;
+    }
+    setSessions((current) => {
+      const target = current.find((item) => item.id === id);
+      if (!target) return current;
+      const rest = current.filter((item) => item.id !== id);
+      const updated = { ...target, pinned };
+      if (pinned) return [updated, ...rest];
+      const pinnedItems = rest.filter((item) => item.pinned);
+      return [...pinnedItems, updated, ...rest.filter((item) => !item.pinned)];
+    });
+    try {
+      await refreshSessionList();
+    } catch {
+      // 本地顺序已经更新。列表刷新失败时保留这次置顶。
+    }
+  }
+
+  async function handleDelete(id: string) {
+    await deleteConversationImpl(id);
+    if (activeIdRef.current === id) showBlankConversation();
+    setSessions((current) => current.filter((item) => item.id !== id));
+    setCache((current) => {
+      if (!(id in current)) return current;
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+    setContexts((current) => {
+      if (!(id in current)) return current;
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+    delete modesRef.current[id];
+    try {
+      await refreshSessionList();
+    } catch {
+      // 这一条已经从列表拿掉。
+    }
+  }
+
+  function handleNew() {
+    if (busyRef.current) return;
+    rememberMode(activeIdRef.current, currentMode());
+    activeIdRef.current = null;
+    setView("chat");
+    setActiveId(null);
+    setUnsent([]);
+    setDraft("");
+    clearAttachments();
+    setBanner(null);
+    resetDraftMode();
   }
 
   /** 一键任务草稿回填：切回对话并放进输入框，教师可微调后发送 */
   function handleTeachingDraft(draft: string) {
     setView("chat");
-    setGoalEditMode(false);
     setDraft(draft);
     setBanner(null);
   }
@@ -663,18 +863,18 @@ function WorkbenchScreen({
   function handleSelect(id: string) {
     setView("chat");
     if (busyRef.current || id === activeId) return;
+    rememberMode(activeIdRef.current, currentMode());
+    activeIdRef.current = id;
     setBanner(null);
     setActiveId(id);
-    setGoalEditMode(false);
-    setPlanMode(false);
+    const cached = modesRef.current[id];
+    showMode(cached ?? { askMode: false, planMode: false, planStatus: "off", planBody: "" });
     void clientRef.current
       .getConversation(id)
       .then((conversation) => {
-        if (!aliveRef.current) return;
+        if (!aliveRef.current || activeIdRef.current !== id) return;
         setCache((current) => ({ ...current, [id]: conversation.messages }));
-        rememberContext(id, conversation.context);
-        setGoal(typeof conversation.goal === "string" ? conversation.goal : "");
-        setPlanMode(conversation.plan_mode === true);
+        applyMeta(conversation, id);
       })
       .catch((error: unknown) => {
         if (!aliveRef.current) return;
@@ -738,6 +938,8 @@ function WorkbenchScreen({
         onOpenTeaching={() => setView("teaching")}
         onNew={handleNew}
         onSelect={handleSelect}
+        onPin={handlePin}
+        onDelete={handleDelete}
         onOpenSettings={() => setView("settings")}
         onCloseSettings={() => setView("chat")}
         onSwitchAccount={() => {
@@ -799,6 +1001,18 @@ function WorkbenchScreen({
                 if (!activeId) return;
                 void runReject(activeId, taskId, callId);
               }}
+              planAction={
+                planBody.trim() && (planStatus === "draft" || planStatus === "approved")
+                  ? {
+                      label: t("planGenerate"),
+                      note: t("planGenerateNote"),
+                      disabled: submitting,
+                      onGenerate: (choice) => {
+                        void handleGenerate(choice);
+                      },
+                    }
+                  : null
+              }
             />
             <input
               ref={fileInputRef}
@@ -846,11 +1060,9 @@ function WorkbenchScreen({
                     onPlanModeChange={(enabled) => {
                       void persistPlanMode(enabled);
                     }}
-                    goal={goal}
-                    goalEditMode={goalEditMode}
-                    onGoalEditModeChange={(enabled) => {
-                      if (enabled) enterGoalEdit();
-                      else exitGoalEdit();
+                    askMode={askMode}
+                    onAskModeChange={(enabled) => {
+                      void persistAskMode(enabled);
                     }}
                     onUnavailable={() => showToast(t("unavailable"))}
                   />
@@ -878,15 +1090,17 @@ function WorkbenchScreen({
               contextSlot={
                 <ContextUsage
                   context={activeId ? contexts[activeId] : undefined}
-                  draft={goalEditMode ? "" : draft}
+                  draft={draft}
                 />
               }
               planMode={planMode}
               onExitPlan={() => {
                 void persistPlanMode(false);
               }}
-              goalEditMode={goalEditMode}
-              onExitGoal={() => exitGoalEdit()}
+              askMode={askMode}
+              onExitAsk={() => {
+                void persistAskMode(false);
+              }}
             />
             {toast !== null ? (
               <div className="toast-wrap" role="status">
@@ -928,6 +1142,30 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function streamingMessages(
+  previous: ConversationMessage[],
+  taskId: string,
+  content: string,
+  text: string,
+): ConversationMessage[] {
+  const kept = previous.filter((message) => message.task_id !== taskId && !message.task_id.startsWith("local-"));
+  const createdAt = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  const next: ConversationMessage[] = [
+    ...kept,
+    { task_id: taskId, role: "user", content, status: "running", created_at: createdAt },
+  ];
+  if (text !== "") {
+    next.push({
+      task_id: taskId,
+      role: "assistant",
+      content: text,
+      status: "running",
+      created_at: createdAt,
+    });
+  }
+  return next;
 }
 
 function pendingMessage(content: string): ConversationMessage {

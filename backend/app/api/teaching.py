@@ -14,7 +14,7 @@ SCORE_MESSAGE = "得分写成 0 到 100 的数字。"
 STUDENT_MESSAGE = "学生名单写成名字的列表，每个名字 1 到 32 个字。"
 POINT_MESSAGE = "知识点写成 1 到 64 个字。"
 DOC_TYPE_MESSAGE = "类型只支持 lesson_plan 或 rubric。"
-CONTENT_MESSAGE = "正文写成 1 到 20000 个字。"
+CONTENT_MESSAGE = "正文不能是空的。"
 RECORD_MESSAGE = "成绩记录写成 [{student, scores}] 的列表。"
 UNKNOWN_FIELD_MESSAGE = "请求里有不能识别的字段。"
 CLASS_ID_MESSAGE = "班级不存在。"
@@ -24,7 +24,6 @@ MAX_STUDENTS = 200
 MAX_RECORDS = 200
 MAX_POINTS = 200
 MAX_PREREQUISITES = 10
-MAX_CONTENT_CHARS = 20000
 MAX_SCORE = 100
 
 
@@ -51,8 +50,8 @@ def parse_create_point(body: object) -> tuple[str, str, list[str]]:
         raise RequestError("fields", public_message=UNKNOWN_FIELD_MESSAGE)
     name = _point_name(body.get("name"))
     description = body.get("description", "")
-    if not isinstance(description, str) or len(description) > 500:
-        raise RequestError("description", public_message="说明写成不超过 500 个字。")
+    if not isinstance(description, str):
+        raise RequestError("description", public_message="说明写成文字。")
     raw_prerequisites = body.get("prerequisites", [])
     if not isinstance(raw_prerequisites, list) or len(raw_prerequisites) > MAX_PREREQUISITES:
         raise RequestError("prerequisites", public_message="先修知识点写成不超过 10 个名字的列表。")
@@ -119,7 +118,7 @@ def parse_create_document(body: object) -> tuple[str, str, str]:
     if not isinstance(content, str):
         raise RequestError("content", public_message=CONTENT_MESSAGE)
     content = content.strip()
-    if content == "" or len(content) > MAX_CONTENT_CHARS:
+    if content == "":
         raise RequestError("content", public_message=CONTENT_MESSAGE)
     return doc_type, title, content
 

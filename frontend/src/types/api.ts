@@ -33,6 +33,16 @@ export type ToolResult = {
 /** 审批模式：手动 / 自动。忽略自定义 */
 export type ApprovalMode = "manual" | "auto";
 
+export type PlanStatus = "off" | "draft" | "approved";
+
+export type PlanSnapshot = {
+  conversation_id: string;
+  ask_mode?: boolean;
+  plan_mode: boolean;
+  plan_status: PlanStatus;
+  plan_body: string;
+};
+
 export type ConversationMessage = {
   task_id: string;
   role: "user" | "assistant";
@@ -45,6 +55,13 @@ export type ConversationMessage = {
   /** 工具执行完成后追加到 assistant 消息下方的结果列表 */
   tool_results?: ToolResult[];
 };
+
+export type StreamEvent =
+  | { event: "snapshot"; text: string }
+  | { event: "delta"; text: string }
+  | { event: "reset" }
+  | { event: "done" }
+  | { event: "error"; code: string; message: string; retryable: boolean };
 
 export type TaskSnapshot = {
   task_id: string;
@@ -74,9 +91,10 @@ export type ConversationSummary = {
   conversation_id: string;
   title: string;
   created_at: string;
+  pinned: boolean;
 };
 
-/** 用量圈里的一块。name 是 system、tools、context、summary、goal、plan、conversation。 */
+/** 用量圈里的一块。name 是 system、tools、context、summary、ask、plan、conversation。 */
 export type ContextPart = {
   name: string;
   tokens: number;
@@ -87,6 +105,7 @@ export type ContextUsageInfo = {
   used_tokens: number;
   limit_tokens: number;
   limit_source: "provider" | "fallback";
+  output_tokens?: number;
   compressed: boolean;
   parts?: ContextPart[];
 };
@@ -95,6 +114,7 @@ export const EMPTY_CONTEXT: ContextUsageInfo = {
   used_tokens: 0,
   limit_tokens: 1_000_000,
   limit_source: "fallback",
+  output_tokens: 128_000,
   compressed: false,
   parts: [],
 };
@@ -110,15 +130,17 @@ export type ConversationApi = {
     conversation_id: string;
     messages: ConversationMessage[];
     context?: ContextUsageInfo;
-    goal?: string;
+    ask_mode?: boolean;
     plan_mode?: boolean;
+    plan_status?: PlanStatus;
+    plan_body?: string;
   }>;
-  setGoal(conversationId: string, goal: string): Promise<{ conversation_id: string; goal: string }>;
-  setPlanMode(
-    conversationId: string,
-    planMode: boolean,
-  ): Promise<{ conversation_id: string; plan_mode: boolean }>;
+  setAskMode(conversationId: string, askMode: boolean): Promise<PlanSnapshot & { ask_mode: boolean }>;
+  setPlanMode(conversationId: string, planMode: boolean): Promise<PlanSnapshot>;
+  savePlanBody(conversationId: string, body: string): Promise<PlanSnapshot>;
+  generatePlan(conversationId: string): Promise<PlanSnapshot>;
   getTask(taskId: string): Promise<TaskSnapshot>;
+  streamTask?(taskId: string): AsyncIterable<StreamEvent>;
   /** 手动审批：批准一个 pending 的工具调用，执行后 tool_result 会随 getConversation 返回 */
   approveCall(conversationId: string, taskId: string, callId: string): Promise<void>;
   /** 手动审批：拒绝一个 pending 的工具调用，拒绝后 tool_result 记录拒绝原因 */

@@ -24,7 +24,7 @@ Include:
 
 Be concise, structured, and focused on helping the next LLM seamlessly continue the work."""
 
-OUTPUT_RESERVE = 2000
+OUTPUT_RESERVE = 128_000
 KEEP_RECENT_TOKENS = 20_000
 
 

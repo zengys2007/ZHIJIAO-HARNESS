@@ -43,7 +43,7 @@ MVP 两步验收已通过。教师可以在同一会话里连续对话，生产�
 - 网页约束：入口 `index.html`；单文件不超过 500 KB，合计不超过 2 MB；UTF-8；相对路径；无外链脚本、外链样式和网络请求。后端不执行页面脚本。
 - 预览用 iframe，`sandbox="allow-scripts"`，不授予 `allow-same-origin`。CSP 为 `default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; base-uri 'none'; form-action 'none'`。
 - 修改时，用户消息带上一版文件。模型调用 `write_page` 提交完整新文件。导出是该版本的 zip。
-- 带页面正文的模型请求把 `max_tokens` 提高到能容纳文件。纯对话轮次仍用 2000。
+- 带页面正文的模型请求使用该模型的最大输出 token，与对话轮次相同。不再把纯对话单独压到 2000。
 
 ### 不做
 

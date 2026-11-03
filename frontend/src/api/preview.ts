@@ -1,4 +1,4 @@
-import { countGoalTokens, countMessageList, countPlanTokens } from "../lib/tokens";
+import { countAskTokens, countMessageList, countPlanTokens } from "../lib/tokens";
 import type {
   ConversationApi,
   ConversationMessage,
@@ -20,8 +20,10 @@ const MOCK_TOOL_POOL: { name: string; description: string; risk: "low" | "medium
 
 type Thread = {
   messages: ConversationMessage[];
-  goal: string;
+  ask_mode: boolean;
   plan_mode: boolean;
+  plan_status: "off" | "draft" | "approved";
+  plan_body: string;
   /** task_id → 这一轮的工具调用提案（可能为空） */
   approvals: Record<string, ApprovalRecord[]>;
 };
@@ -107,7 +109,14 @@ export function createPreviewApi(now: () => string = timestamp): ConversationApi
   return {
     async createConversation() {
       const conversationId = randomId();
-      threads.set(conversationId, { messages: [], approvals: {}, goal: "", plan_mode: false });
+      threads.set(conversationId, {
+        messages: [],
+        approvals: {},
+        ask_mode: false,
+        plan_mode: false,
+        plan_status: "off",
+        plan_body: "",
+      });
       return { conversation_id: conversationId };
     },
     async sendMessage(conversationId, content, _options) {
@@ -144,41 +153,70 @@ export function createPreviewApi(now: () => string = timestamp): ConversationApi
       return {
         conversation_id: conversationId,
         messages: merged,
-        goal: thread.goal,
+        ask_mode: thread.ask_mode,
         plan_mode: thread.plan_mode,
+        plan_status: thread.plan_status,
+        plan_body: thread.plan_body,
         context: {
           used_tokens:
             countMessageList(merged.map((message) => message.content)) +
-            countGoalTokens(thread.goal) +
-            countPlanTokens(thread.plan_mode),
+            countAskTokens(thread.ask_mode) +
+            countPlanTokens(thread.plan_status, thread.plan_body),
           limit_tokens: 1_000_000,
           limit_source: "fallback" as const,
+          output_tokens: 128_000,
           compressed: false,
           parts: [
             { name: "system", tokens: 0 },
             { name: "tools", tokens: 0 },
             { name: "context", tokens: 0 },
             { name: "summary", tokens: 0 },
-            { name: "goal", tokens: countGoalTokens(thread.goal) },
-            { name: "plan", tokens: countPlanTokens(thread.plan_mode) },
+            { name: "ask", tokens: countAskTokens(thread.ask_mode) },
+            { name: "plan", tokens: countPlanTokens(thread.plan_status, thread.plan_body) },
             { name: "conversation", tokens: countMessageList(merged.map((message) => message.content)) },
           ],
         },
       };
     },
-    async setGoal(conversationId, goal) {
+    async setAskMode(conversationId, askMode) {
       const thread = getThread(conversationId);
       if (!thread) throw new Error("会话不存在");
-      thread.goal = goal.trim();
+      thread.ask_mode = askMode;
+      if (askMode) {
+        thread.plan_mode = false;
+        thread.plan_status = "off";
+      }
       threads.set(conversationId, thread);
-      return { conversation_id: conversationId, goal: thread.goal };
+      return { ...planSnapshot(conversationId, thread), ask_mode: thread.ask_mode };
     },
     async setPlanMode(conversationId, planMode) {
       const thread = getThread(conversationId);
       if (!thread) throw new Error("会话不存在");
       thread.plan_mode = planMode;
+      thread.plan_status = planMode ? "draft" : "off";
+      if (planMode) thread.ask_mode = false;
       threads.set(conversationId, thread);
-      return { conversation_id: conversationId, plan_mode: thread.plan_mode };
+      return planSnapshot(conversationId, thread);
+    },
+    async savePlanBody(conversationId, body) {
+      const thread = getThread(conversationId);
+      if (!thread) throw new Error("会话不存在");
+      if (thread.plan_status !== "draft") throw new Error("先进入计划模式再改计划。");
+      thread.plan_body = body.trim();
+      threads.set(conversationId, thread);
+      return planSnapshot(conversationId, thread);
+    },
+    async generatePlan(conversationId) {
+      const thread = getThread(conversationId);
+      if (!thread) throw new Error("会话不存在");
+      if (!thread.plan_body.trim()) throw new Error("还没有可确认的计划，先写出计划再生成。");
+      if (thread.plan_status !== "draft" && thread.plan_status !== "approved") {
+        throw new Error("先进入计划模式再改计划。");
+      }
+      thread.plan_status = "approved";
+      thread.plan_mode = false;
+      threads.set(conversationId, thread);
+      return planSnapshot(conversationId, thread);
     },
     async getTask(taskId) {
       const found = findTaskThread(taskId);
@@ -206,6 +244,11 @@ export function createPreviewApi(now: () => string = timestamp): ConversationApi
         const { text, approvals: newApprovals } = composeReply(user.content, withTools);
         thread.approvals[taskId] = newApprovals;
         thread.messages.push(buildAssistantMessage(taskId, text, newApprovals));
+        if (thread.plan_status === "draft") thread.plan_body = text;
+        if (thread.plan_status === "approved") {
+          thread.plan_status = "off";
+          thread.plan_mode = false;
+        }
       }
       const assistant = thread.messages.find((m) => m.task_id === taskId && m.role === "assistant");
       const finalApprovalStatuses = (thread.approvals[taskId] ?? []).map((a) => a.approval_status);
@@ -288,6 +331,16 @@ export function createPreviewApi(now: () => string = timestamp): ConversationApi
 }
 
 export const previewApi = createPreviewApi();
+
+function planSnapshot(conversationId: string, thread: Thread) {
+  return {
+    conversation_id: conversationId,
+    ask_mode: thread.ask_mode,
+    plan_mode: thread.plan_status === "draft",
+    plan_status: thread.plan_status,
+    plan_body: thread.plan_body,
+  };
+}
 
 function randomId(): string {
   const bytes = new Uint8Array(16);

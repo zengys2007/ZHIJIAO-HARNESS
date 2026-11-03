@@ -1,6 +1,7 @@
 """模型节点：拼装消息，调用 complete，步数加一。"""
 
 from app.context.assemble import assemble_model_input
+from app.llm.hub import hub
 from app.llm.protocol import AssistantMessage, ModelError
 
 
@@ -15,10 +16,11 @@ def make_model_node(registry, complete, system: str):
                 state["messages"],
                 state.get("context_digest") or "",
                 state.get("context_summary") or "",
-                state.get("context_goal") or "",
-                bool(state.get("context_plan")),
+                state.get("context_ask") or "",
+                state.get("context_plan") or "",
             ),
             tools or None,
+            hub.sink(state.get("task_id") or ""),
         )
         if isinstance(result, ModelError):
             return {"stop": result.code}

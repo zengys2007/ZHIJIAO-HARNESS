@@ -14,7 +14,7 @@ class Scripted:
         self._replies = list(replies)
         self.seen = []
 
-    def __call__(self, messages, tools):
+    def __call__(self, messages, tools, sink=None):
         self.seen.append((messages, tools))
         text = self._replies.pop(0)
         return AssistantMessage(content=text, tool_calls=[])
@@ -80,6 +80,47 @@ def test_missing_conversation_is_not_found(tmp_path):
         raise AssertionError("expected not found")
     except NotFoundError:
         pass
+
+
+def test_sidebar_title_stays_new_chat_until_the_first_round_succeeds(tmp_path):
+    repo, store, conversation_id, owner_id = _conversation(tmp_path)
+    assert _title(repo, owner_id) == "新对话"
+    repo.save_plan_mode(conversation_id, owner_id, True)
+    assert _title(repo, owner_id) == "新对话"
+
+    pending = repo.submit_message(conversation_id, "还在进行", owner_id)
+    assert _title(repo, owner_id) == "新对话"
+    run_turn(
+        repo,
+        store,
+        build_graph(production_registry(), Scripted([""]), system="你是教师的助手。"),
+        pending.id,
+    )
+    assert repo.get_task(pending.id).status == FAILED
+    assert _title(repo, owner_id) == "新对话"
+
+    done = repo.submit_message(conversation_id, "一二三四五六七八九十一二三四五六七八九十\n第二行", owner_id)
+    assert _title(repo, owner_id) == "新对话"
+    run_turn(
+        repo,
+        store,
+        build_graph(production_registry(), Scripted(["好"]), system="你是教师的助手。"),
+        done.id,
+    )
+    assert _title(repo, owner_id) == "一二三四五六七八九十一二三四五六七八…"
+
+    later = repo.submit_message(conversation_id, "下一轮不改标题", owner_id)
+    run_turn(
+        repo,
+        store,
+        build_graph(production_registry(), Scripted(["也好"]), system="你是教师的助手。"),
+        later.id,
+    )
+    assert _title(repo, owner_id) == "一二三四五六七八九十一二三四五六七八…"
+
+
+def _title(repo: SqliteRepository, owner_id: str) -> str:
+    return repo.list_conversations(owner_id)[0].title
 
 
 def test_assemble_keeps_prior_turns_and_places_the_summary_before_them():

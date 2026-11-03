@@ -17,6 +17,8 @@ def test_new_task_is_pending_and_round_trips(tmp_path):
     assert loaded.raw_request == "做一个页面"
     assert loaded.preset_hint is None
     assert repo.get_task("missing") is None
+    long_task = repo.create_task("点" * 4001, None)
+    assert repo.get_task(long_task.id).raw_request == "点" * 4001
 
 
 @pytest.mark.parametrize(
@@ -24,7 +26,6 @@ def test_new_task_is_pending_and_round_trips(tmp_path):
     [
         ("", None),
         ("   ", None),
-        ("点" * 4001, None),
         ("做一个页面", "roll-call"),
         ("做一个页面", "timer"),
         ("做一个页面", "poll"),

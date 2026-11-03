@@ -6,9 +6,6 @@
 from app.storage.protocol import TeachingData
 from app.teaching.insights import teaching_insights
 
-DOC_EXCERPT_CHARS = 500
-STUDENT_LIST_LIMIT = 30
-
 KIND_LABELS = {"homework": "作业", "quiz": "测验"}
 DOC_LABELS = {"lesson_plan": "教案", "rubric": "评分标准"}
 
@@ -69,9 +66,8 @@ def _classes_section(data: TeachingData) -> str:
     lines = ["班级（含班级名单）："]
     for class_item in data.classes:
         students = [item.name for item in data.students if item.class_id == class_item.id]
-        names = "、".join(students[:STUDENT_LIST_LIMIT])
-        suffix = "等" if len(students) > STUDENT_LIST_LIMIT else ""
-        lines.append(f"- {class_item.name}（{len(students)}人）：{names}{suffix}")
+        names = "、".join(students)
+        lines.append(f"- {class_item.name}（{len(students)}人）：{names}")
     return "\n".join(lines)
 
 
@@ -126,6 +122,5 @@ def _documents_section(data: TeachingData) -> str:
     lines = ["教师已有的教案与评分标准（摘录）："]
     for document in data.documents:
         label = DOC_LABELS.get(document.doc_type, document.doc_type)
-        excerpt = document.content[:DOC_EXCERPT_CHARS]
-        lines.append(f"- {label}「{document.title}」：{excerpt}")
+        lines.append(f"- {label}「{document.title}」：{document.content}")
     return "\n".join(lines)

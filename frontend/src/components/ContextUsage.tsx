@@ -26,7 +26,7 @@ export function ContextUsage({ context = EMPTY_CONTEXT, draft }: Props) {
     context: t("contextPartContext"),
     summary: t("contextPartSummary"),
     conversation: t("contextPartConversation"),
-    goal: t("contextPartGoal"),
+    ask: t("contextPartAsk"),
     plan: t("contextPartPlan"),
     draft: t("contextPartDraft"),
   };
@@ -91,6 +91,12 @@ export function ContextUsage({ context = EMPTY_CONTEXT, draft }: Props) {
             <span>{t("contextLimit")}</span>
             <span>{formatTokens(limit)}</span>
           </p>
+          {context.output_tokens ? (
+            <p>
+              <span>{t("contextOutput")}</span>
+              <span>{formatTokens(context.output_tokens)}</span>
+            </p>
+          ) : null}
           <ul className="context-parts">
             {rows.map((part) => (
               <li key={part.name}>

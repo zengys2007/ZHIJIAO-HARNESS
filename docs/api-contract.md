@@ -1,10 +1,10 @@
 # 智教 Harness MVP 接口契约
 
-状态：已确认（2026-10-21）。对话 MVP 已于 2026-10-22 标记完成。2026-10-22 起，对话和模型试连要求登录，规则见第 9 节。
+状态：已确认（2026-10-21）。对话 MVP 已于 2026-10-22 标记完成。2026-10-22 起，对话和模型试连要求登录，规则见第 10 节。
 
 本文是对话接口的字段契约。产品行为以 [MVP 路线](superpowers/specs/2026-10-21-mvp-roadmap.md) 为准。路径或状态含义有冲突时，先改路线，再改本文。
 
-范围包括四个对话接口、当前教师的会话列表、第 7 节的模型试连，以及第 9 节的注册、登录、退出和当前用户。不包含 `GET /health`、工作台页面，也不包含产物预览、修改和导出。那些路由不在本契约里。
+范围包括四个对话接口、第 6 节的任务文字流、当前教师的会话列表、第 8 节的模型试连，以及第 10 节的注册、登录、退出和当前用户。不包含 `GET /health`、工作台页面，也不包含产物预览、修改和导出。那些路由不在本契约里。
 
 ## 1. 共同约定
 
@@ -12,7 +12,7 @@
 - 字符按 Unicode 码位计数，不是字节。教师原文先去掉首尾空白再计数。
 - `conversation_id` 和 `task_id` 是 32 位小写十六进制。路径里的标识不符合这个形式，或者库里没有，都返回 `not_found`。
 - 成功响应不含 `error`。失败响应只有 `error`，不含部分成功字段。
-- `error.message` 使用第 6 节的句子。不含堆栈、绝对路径、密钥和系统提示词。
+- `error.message` 使用第 7 节的句子。不含堆栈、绝对路径、密钥和系统提示词。
 - 对话、会话列表和模型试连从 Cookie `zhijiao_session` 识别教师。不读取 `Authorization`。未登录返回 401 `unauthenticated`。`GET /health` 不登录。
 - 未知字段视为 `invalid_input`。不忽略多出来的字段。
 
@@ -92,8 +92,10 @@
 ```json
 {
   "conversation_id": "0123456789abcdef0123456789abcdef",
-  "goal": "",
+  "ask_mode": false,
   "plan_mode": false,
+  "plan_status": "off",
+  "plan_body": "",
   "messages": [
     {
       "task_id": "fedcba9876543210fedcba9876543210",
@@ -113,9 +115,9 @@
 }
 ```
 
-`goal` 是当前会话目标，去掉首尾空白后的原文。没有目标时是空字符串。它不写进 `messages`。
+`ask_mode` 为 `true` 时，这一会话处于提问模式。它不写进 `messages`。
 
-`plan_mode` 是当前会话是否处于计划模式。为 `true` 时，每一轮发给模型的内容在目标之后挂一条固定说明，要求先写可审阅计划。它不写进 `messages`。
+`plan_mode` 在 `plan_status` 为 `draft` 时为 `true`，其余为 `false`。`plan_status` 是 `off`、`draft` 或 `approved`。`plan_body` 是当前计划正文，去掉首尾空白后的原文。它们都不写进 `messages`。提问和计划互相排斥：打开其中一个会关掉另一个。
 
 `messages` 按 `created_at` 升序。同一任务里，教师消息在助手回复之前。
 
@@ -140,40 +142,52 @@
 | `used_tokens` | 最近一次模型请求的 `prompt_tokens + completion_tokens`。还没有请求时，用本地 tiktoken（`o200k_base`，每条消息加 4，整段加 3）估算已提交上下文 |
 | `limit_tokens` | 供应商 `GET /models` 里的 `max_model_len`、`context_length` 或 `context_window`。读不到时用 `CONTEXT_TOKEN_LIMIT`，默认 1000000 |
 | `limit_source` | `provider` 或 `fallback` |
+| `output_tokens` | 这一轮允许生成的最大 token。来自供应商的 `max_completion_tokens`、`max_output_tokens` 或 `output_token_limit`。读不到时为 128000，且不超过 `limit_tokens` |
 | `compressed` | 该会话是否已经把更早的成功轮压成摘要。摘要存在会话行上，任务里的原文仍全部返回 |
-| `parts` | 各块的本地 token 估算。`name` 为 `system`、`tools`、`context`、`summary`、`goal`、`plan`、`conversation`。`tokens` 为非负整数。系统策略、工具说明、教学资料、交接摘要、会话目标、计划模式说明和已成功对话分开计数。没有目标时 `goal` 为 0；计划模式关闭时 `plan` 为 0。输入框草稿由前端另计，不在这个数组里 |
+| `parts` | 各块的本地 token 估算。`name` 为 `system`、`tools`、`context`、`summary`、`ask`、`plan`、`conversation`。`tokens` 为非负整数。系统策略、工具说明、教学资料、交接摘要、提问说明、计划说明和已成功对话分开计数。`ask_mode` 为 `false` 时 `ask` 为 0。`plan_status` 为 `off` 时 `plan` 为 0。输入框草稿由前端另计，不在这个数组里 |
 
-发送前的精确计数走 `POST {LLM_BASE_URL}/responses/input_tokens`。该接口不可用时，压缩判断使用同一套本地 tiktoken 计数。已用 token 达到窗口的 90%，或加上预留的 2000 输出 token 后放不下时，更早的成功轮换成交接摘要，最近不超过 20000 token 的整轮原文仍发给模型。摘要失败时，只从这一轮的模型输入里丢掉最旧的整轮，不删除已保存的任务。
+发送前的精确计数走 `POST {LLM_BASE_URL}/responses/input_tokens`。该接口不可用时，压缩判断使用同一套本地 tiktoken 计数。已用 token 达到窗口的 90%，或再加上最大输出 token 后放不下时，更早的成功轮换成交接摘要，最近不超过 20000 token 的整轮原文仍发给模型。最大输出来自供应商，读不到时为 128000，并写入 `output_tokens`。摘要失败时，只从这一轮的模型输入里丢掉最旧的整轮，不删除已保存的任务。
 
-`PUT /api/conversations/{conversation_id}/goal`
+`PUT /api/conversations/{conversation_id}/ask`
 
-正文只有 `goal` 字符串。去掉首尾空白后保存。空字符串清除目标。不按字数拒绝。这条目标消息本身的 token 数超过 `limit_tokens - 2000` 时返回 400，`error.code` 为 `invalid_input`，`error.message` 为「这个目标占的上下文已经放不下输出，缩短后再保存。」已保存的目标保持不变。
+正文只有 `{"ask_mode": true}` 或 `{"ask_mode": false}`。打开提问时，计划状态回到 `off`，已有 `plan_body` 保留。别人的会话返回 `not_found`。
 
 200：
 
 ```json
 {
   "conversation_id": "0123456789abcdef0123456789abcdef",
-  "goal": "把异分母加减讲通"
+  "ask_mode": true,
+  "plan_mode": false,
+  "plan_status": "off",
+  "plan_body": ""
 }
 ```
 
-目标挂在交接摘要之后、已成功对话之前，单独一条用户消息，前缀是「当前会话目标：」。自动压缩不把这条写进摘要。别人的会话返回 `not_found`。
+`ask_mode` 为 `true` 时，在交接摘要之后、已成功对话之前挂一条用户消息：「当前处于提问模式：只回答教师的问题，不要交付试题、评语或课件成品。」教师发出的仍是普通消息，回复也按普通助手消息保存。自动压缩不把这句说明写进摘要。关掉之后不再注入。
 
 `PUT /api/conversations/{conversation_id}/plan`
 
-正文只有布尔字段 `plan_mode`。`true` 打开计划模式，`false` 关闭。别人的会话返回 `not_found`。
+正文是下面三种之一：
+
+- `{"plan_mode": true}` 进入草稿，`false` 退出。退出后保留 `plan_body`。
+- `{"plan_body": "..."}` 只在草稿中保存正文。不在草稿时返回 400，`error.message` 为「先进入计划模式再改计划。」
+- `{"action": "generate"}` 把非空正文标为 `approved`。正文为空时返回 400，`error.message` 为「还没有可确认的计划，先写出计划再生成。」
+
+计划正文超过 `limit_tokens - output_tokens` 时返回 400，`error.message` 为「这份计划占的上下文已经放不下输出，缩短后再保存。」别人的会话返回 `not_found`。
 
 200：
 
 ```json
 {
   "conversation_id": "0123456789abcdef0123456789abcdef",
-  "plan_mode": true
+  "plan_mode": true,
+  "plan_status": "draft",
+  "plan_body": ""
 }
 ```
 
-计划模式打开时，在目标之后、已成功对话之前挂一条固定用户消息：「当前处于计划模式：先写出可审阅的计划，等教师确认后再生成具体成品；不要跳过计划直接交付。」自动压缩不把这条写进摘要；关闭后下一轮不再注入。
+进入计划草稿时会关掉提问。草稿时，在交接摘要之后、已成功对话之前挂一条用户消息。还没有正文时是：「当前处于计划模式：只修订下面的计划，不要交付试题、评语或课件成品。」已有正文时，这句话下面再附「计划正文：」和正文。成功的助手回复写入 `plan_body`；失败不覆盖上一份正文。`approved` 的下一轮改为挂：「教师已确认下面的计划。请按这份计划生成可直接使用的成品，不要再改写成新计划。」并附上正文。这一轮成功后 `plan_status` 回到 `off`，正文保留，之后不再注入。失败则保持 `approved`。自动压缩不把计划说明写进摘要。
 
 失败的教师消息：
 
@@ -254,7 +268,25 @@
 
 任务失败不删除本会话里已经成功的消息。
 
-## 6. 错误码
+## 6. 流式任务
+
+`GET /api/tasks/{task_id}/stream`
+
+登录和属主规则与第 5 节相同。未登录返回 401。任务不存在、不属于当前教师，或 `task_id` 格式不对，返回 404。这两种响应在流开始之前，正文是 JSON 错误。
+
+流本身为 200，`Content-Type: text/event-stream; charset=utf-8`，并带 `Cache-Control: no-cache`。每条事件的 `data` 是一行 JSON。
+
+| 事件 | data | 何时发送 |
+| --- | --- | --- |
+| `snapshot` | `{"text":"到目前为止的全文"}` | 连接建立时缓冲里已有正文 |
+| `delta` | `{"text":"这一段新正文"}` | 新的非空正文片段 |
+| `reset` | `{}` | 同一次模型调用发出第二次请求之前。界面清空草稿 |
+| `done` | `{}` | 任务已经是 `succeeded`。之后用第 5 节的 `reply` 或第 4 节的会话替换草稿 |
+| `error` | 与第 7 节错误对象相同 | 任务已经是 `failed`。不附带已丢弃的正文 |
+
+缓冲只在进程内存里。`GET /api/tasks/{task_id}` 的 `reply` 仍只在 `succeeded` 时为非空字符串。失败不写入助手消息，也不覆盖已成功的回复。
+
+## 7. 错误码
 
 | `error.code` | HTTP，仅当这次请求本身失败 | `retryable` | `error.message` |
 | --- | --- | --- | --- |
@@ -272,7 +304,7 @@
 
 本契约不使用 `needs_clarification` 和 `no_artifact`。
 
-## 7. 试连模型
+## 8. 试连模型
 
 `GET /api/llm/config` 只返回两边的服务地址、模型名，以及是否已有密钥。响应里不出现密钥。
 
@@ -300,11 +332,11 @@
 
 连不上时同样是 200，`reachable` 为 `false`。字段不合法时仍是 `invalid_input`。
 
-## 8. 实现状态
+## 9. 实现状态
 
 对话 MVP 已于 2026-10-22 标记完成。四个对话接口、会话列表、模型试连和登录接口已经挂在 `backend/app/main.py`。工作台源码在 `frontend/`，开发入口是 `frontend/index.html`，尚未发送登录 Cookie。画面和文案见 [登录工作台界面](superpowers/specs/2026-10-22-login-frontend.md)。模型适配在 `backend/app/llm/complete.py`。单元测试注入假的 `complete` 和试连函数，不访问真实供应商。
 
-## 9. 登录
+## 10. 登录
 
 登录态是 Cookie `zhijiao_session`。属性为 `HttpOnly`、`SameSite=Lax`、`Path=/`。成功的注册和登录设置这枚 Cookie。退出删除服务端会话并清除 Cookie。
 
@@ -320,9 +352,9 @@
 | 用户名已存在，或使用 `local-admin` | 409 | `conflict` | 这个用户名已经有人使用。 |
 | 未登录 | 401 | `unauthenticated` | 请先登录。 |
 
-对话忙时的 `conflict` 句子不变。别人的会话和任务返回第 6 节的 `not_found`。
+对话忙时的 `conflict` 句子不变。别人的会话和任务返回第 7 节的 `not_found`。
 
-### 9.1 注册
+### 10.1 注册
 
 `POST /api/auth/register`
 
@@ -343,7 +375,7 @@
 
 `remember_token` 是记住此设备的令牌。前端只放在本机账号记录里，不写入日志。没有这个字段时，切换该账号仍要输入密码。
 
-### 9.2 登录
+### 10.2 登录
 
 `POST /api/auth/login`
 
@@ -351,9 +383,9 @@
 { "username": "teacher", "password": "correct-horse" }
 ```
 
-成功时 200，正文与注册相同，并设置 Cookie。字段缺失或类型不对时，用第 9 节对应字段的句子。
+成功时 200，正文与注册相同，并设置 Cookie。字段缺失或类型不对时，用第 10 节对应字段的句子。
 
-### 9.2.1 免密恢复
+### 10.2.1 免密恢复
 
 `POST /api/auth/resume`
 
@@ -363,17 +395,17 @@
 
 令牌有效时 200，正文与登录相同，并设置新的 Cookie。旧令牌立即作废，响应里的 `remember_token` 是下一枚。令牌缺失、过期或不存在时 401，`error.code` 为 `unauthenticated`。空令牌或超长令牌是 400，`error.message` 为「令牌写成 1 到 128 个字。」
 
-### 9.3 退出
+### 10.3 退出
 
 `POST /api/auth/logout`。没有正文。已登录时 204，没有正文。未登录时 401，并清除 Cookie。
 
-### 9.4 当前用户
+### 10.4 当前用户
 
 `GET /api/auth/me`。已登录时 200，正文只有 `user_id`、`username`、`display_name`，不含 `remember_token`。
 
-### 9.5 会话列表
+### 10.5 会话列表
 
-`GET /api/conversations`。只返回当前教师的会话，按 `created_at` 降序，相同时按 `conversation_id` 降序。
+`GET /api/conversations`。只返回当前教师的会话。已置顶的在前，按 `pinned_at` 从新到旧；未置顶的在后，按 `created_at` 降序，相同时按 `conversation_id` 降序。
 
 ```json
 {
@@ -381,12 +413,17 @@
     {
       "conversation_id": "0123456789abcdef0123456789abcdef",
       "title": "这节课怎么讲通分",
-      "created_at": "2026-10-22T02:00:00Z"
+      "created_at": "2026-10-22T02:00:00Z",
+      "pinned": false
     }
   ]
 }
 ```
 
-`title` 取最早一条教师消息的第一行，超过 18 个码位时保留前 18 个并加上 `…`。还没有消息时为「新对话」。
+`pinned` 表示该会话是否置顶。`title` 在第一轮成功前是「新对话」。第一轮成功后取该轮教师消息的第一行，超过 18 个码位时保留前 18 个并加上 `…`。尚未成功的消息不参与标题，之后的轮次也不改标题。计划模式不改变标题。
 
-创建会话时写入当前教师。读取、发送和轮询只面对该教师的记录。
+`PUT /api/conversations/{conversation_id}/pin`。正文只有 `{"pinned": true}` 或 `{"pinned": false}`。再次置顶会刷新置顶时间，排到置顶区最前。成功 200，正文是 `conversation_id` 和 `pinned`。正文不对返回 400 `invalid_input`。别人的会话或不存在的会话返回 404 `not_found`。正在生成回复时也可以置顶或取消。
+
+`DELETE /api/conversations/{conversation_id}`。成功 204，没有正文。同一次事务删除该会话、它的任务和这些任务的事件；任务关联的产物连同版本和已存文件一起删除。班级、成绩、教案不删除。有 `pending` 或 `running` 任务时返回 409 `conflict`，`error.message` 为「这条会话还在回复，等它结束再删除。」别人的会话或不存在的会话返回 404 `not_found`。
+
+创建会话时写入当前教师。读取、发送、置顶、删除和轮询只面对该教师的记录。

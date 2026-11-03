@@ -14,21 +14,12 @@ type Props = {
   /** 计划模式是否打开。打开时消息栏显示灰色 plan */
   planMode: boolean;
   onPlanModeChange: (enabled: boolean) => void;
-  /** 已保存的会话目标；有内容时菜单描述展示截断原文 */
-  goal: string;
-  /** 是否正在内联编辑目标 */
-  goalEditMode: boolean;
-  onGoalEditModeChange: (enabled: boolean) => void;
+  /** 提问模式是否打开。打开时消息栏显示灰色 ask */
+  askMode: boolean;
+  onAskModeChange: (enabled: boolean) => void;
   /** 点击未实现的功能项时触发 */
   onUnavailable: () => void;
 };
-
-/** 菜单右侧目标描述过长时截断 */
-function truncateGoal(text: string, max = 16): string {
-  const chars = [...text.trim()];
-  if (chars.length <= max) return text.trim();
-  return `${chars.slice(0, max).join("")}…`;
-}
 
 type Item = {
   key: string;
@@ -37,7 +28,7 @@ type Item = {
   /** 右侧灰色描述；权限项由运行时计算 */
   desc?: string;
   icon: React.ReactNode;
-  kind: "plain" | "permission" | "model" | "file" | "plan" | "goal";
+  kind: "plain" | "permission" | "model" | "file" | "plan" | "ask";
 };
 
 /** 未实现项点击后的统一提示文案 */
@@ -51,9 +42,8 @@ export function PlusMenu({
   onOpenGoals,
   planMode,
   onPlanModeChange,
-  goal,
-  goalEditMode,
-  onGoalEditModeChange,
+  askMode,
+  onAskModeChange,
   onUnavailable,
 }: Props) {
   const { locale, t } = useAppearance();
@@ -85,20 +75,15 @@ export function PlusMenu({
       items: [
         { key: "file", label: t("file"), en: "file", icon: <FileIcon />, kind: "file" },
         {
-          key: "goal",
-          label: t("goal"),
-          en: "goal",
-          desc: goalEditMode
-            ? `${t("currentPrefix")}${t("goal")}`
-            : goal.trim()
-              ? truncateGoal(goal)
-              : t("goalDesc"),
-          icon: <GoalIcon />,
-          kind: "goal",
+          key: "ask",
+          label: t("ask"),
+          en: "ask",
+          desc: askMode ? `${t("currentPrefix")}${t("ask")}` : t("askDesc"),
+          icon: <AskIcon />,
+          kind: "ask",
         },
         { key: "goals", label: t("goalManage"), en: "library", desc: t("goalManageDesc"), icon: <GoalIcon />, kind: "plain" },
         { key: "plan", label: t("plan"), en: "plan", desc: planMode ? `${t("currentPrefix")}${t("plan")}` : t("planDesc"), icon: <PlanIcon />, kind: "plan" },
-        { key: "feedback", label: t("feedback"), en: "feedback", desc: t("feedbackDesc"), icon: <FeedbackIcon />, kind: "plain" },
       ],
     },
     {
@@ -133,8 +118,8 @@ export function PlusMenu({
       setOpen(false);
       return;
     }
-    if (item.kind === "goal") {
-      onGoalEditModeChange(!goalEditMode);
+    if (item.kind === "ask") {
+      onAskModeChange(!askMode);
       setOpen(false);
       return;
     }
@@ -212,12 +197,17 @@ function FileIcon() {
   );
 }
 
-function GoalIcon() {
+function AskIcon() {
   return (
     <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
-      <circle cx="12" cy="12" r="7.5" fill="none" stroke="currentColor" strokeWidth="1.8" />
-      <circle cx="12" cy="12" r="3.8" fill="none" stroke="currentColor" strokeWidth="1.8" />
-      <circle cx="12" cy="12" r="1" fill="currentColor" />
+      <path
+        d="M6 7.5A5.5 5.5 0 0 1 12 5a5.5 5.5 0 0 1 1.2 10.87V17.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+      <circle cx="12" cy="20" r="0.9" fill="currentColor" />
     </svg>
   );
 }
@@ -234,20 +224,6 @@ function PlanIcon() {
         strokeLinejoin="round"
       />
       <path d="M12.5 7h6.5M12.5 14h6.5M6 19.5h12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function FeedbackIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
-      <path
-        d="M5 7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-5.5L8 19.5V16H7a2 2 0 0 1-2-2z"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinejoin="round"
-      />
     </svg>
   );
 }

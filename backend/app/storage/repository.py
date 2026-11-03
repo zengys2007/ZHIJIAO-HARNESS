@@ -181,16 +181,16 @@ class SqliteRepository:
     def list_conversations(self, owner_id: str) -> list[ConversationSummary]:
         rows = self._conn.execute(
             """
-            SELECT c.id, c.created_at,
+            SELECT c.id, c.created_at, c.pinned_at,
               (
                 SELECT raw_request FROM tasks
-                WHERE conversation_id = c.id
+                WHERE conversation_id = c.id AND status = 'succeeded'
                 ORDER BY created_at, id
                 LIMIT 1
               ) AS first_message
             FROM conversations c
             WHERE c.owner_id = ?
-            ORDER BY c.created_at DESC, c.id DESC
+            ORDER BY c.pinned_at DESC, c.created_at DESC, c.id DESC
             """,
             (owner_id,),
         ).fetchall()
@@ -199,9 +199,73 @@ class SqliteRepository:
                 conversation_id=row["id"],
                 title=_conversation_title(row["first_message"]),
                 created_at=row["created_at"],
+                pinned=row["pinned_at"] is not None,
             )
             for row in rows
         ]
+
+    def set_pinned(self, conversation_id: str, owner_id: str, pinned: bool) -> bool | None:
+        with self.transaction():
+            found = self._conn.execute(
+                "SELECT id FROM conversations WHERE id = ? AND owner_id = ?",
+                (conversation_id, owner_id),
+            ).fetchone()
+            if found is None:
+                return None
+            self._conn.execute(
+                "UPDATE conversations SET pinned_at = ? WHERE id = ?",
+                (_precise_now() if pinned else None, conversation_id),
+            )
+        return pinned
+
+    def delete_conversation(self, conversation_id: str, owner_id: str) -> list[str]:
+        with self.transaction():
+            found = self._conn.execute(
+                "SELECT id FROM conversations WHERE id = ? AND owner_id = ?",
+                (conversation_id, owner_id),
+            ).fetchone()
+            if found is None:
+                raise NotFoundError("conversation not found")
+            busy = self._conn.execute(
+                """
+                SELECT id FROM tasks
+                WHERE conversation_id = ? AND status IN ('pending', 'running')
+                """,
+                (conversation_id,),
+            ).fetchone()
+            if busy is not None:
+                raise ConflictError("conversation is replying")
+            artifact_rows = self._conn.execute(
+                """
+                SELECT DISTINCT artifact_id FROM tasks
+                WHERE conversation_id = ? AND artifact_id IS NOT NULL AND artifact_id != ''
+                """,
+                (conversation_id,),
+            ).fetchall()
+            artifact_ids = [row["artifact_id"] for row in artifact_rows]
+            self._conn.execute(
+                """
+                DELETE FROM events
+                WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id = ?)
+                """,
+                (conversation_id,),
+            )
+            if artifact_ids:
+                marks = ",".join("?" for _ in artifact_ids)
+                self._conn.execute(
+                    f"DELETE FROM versions WHERE artifact_id IN ({marks})",
+                    artifact_ids,
+                )
+                self._conn.execute(
+                    f"DELETE FROM artifacts WHERE id IN ({marks})",
+                    artifact_ids,
+                )
+            self._conn.execute("DELETE FROM tasks WHERE conversation_id = ?", (conversation_id,))
+            self._conn.execute(
+                "DELETE FROM conversations WHERE id = ? AND owner_id = ?",
+                (conversation_id, owner_id),
+            )
+        return artifact_ids
 
     def submit_message(self, conversation_id: str, content: str, owner_id: str) -> Task:
         if not isinstance(content, str):
@@ -288,16 +352,16 @@ class SqliteRepository:
                 (used_tokens, conversation_id),
             )
 
-    def get_goal(self, conversation_id: str) -> str:
+    def get_ask_mode(self, conversation_id: str) -> bool:
         row = self._conn.execute(
-            "SELECT goal FROM conversations WHERE id = ?",
+            "SELECT ask_mode FROM conversations WHERE id = ?",
             (conversation_id,),
         ).fetchone()
         if row is None:
-            return ""
-        return row["goal"] or ""
+            return False
+        return bool(row["ask_mode"])
 
-    def save_goal(self, conversation_id: str, owner_id: str, goal: str) -> str | None:
+    def save_ask_mode(self, conversation_id: str, owner_id: str, enabled: bool) -> bool | None:
         row = self._conn.execute(
             "SELECT owner_id FROM conversations WHERE id = ?",
             (conversation_id,),
@@ -305,20 +369,41 @@ class SqliteRepository:
         if row is None or row["owner_id"] != owner_id:
             return None
         with self.transaction():
-            self._conn.execute(
-                "UPDATE conversations SET goal = ? WHERE id = ?",
-                (goal, conversation_id),
-            )
-        return goal
+            if enabled:
+                self._conn.execute(
+                    "UPDATE conversations SET ask_mode = 1, plan_mode = 0, plan_status = 'off' WHERE id = ?",
+                    (conversation_id,),
+                )
+            else:
+                self._conn.execute(
+                    "UPDATE conversations SET ask_mode = 0 WHERE id = ?",
+                    (conversation_id,),
+                )
+        return enabled
 
     def get_plan_mode(self, conversation_id: str) -> bool:
+        return self.get_plan_state(conversation_id)[0] == "draft"
+
+    def get_plan_state(self, conversation_id: str) -> tuple[str, str]:
         row = self._conn.execute(
-            "SELECT plan_mode FROM conversations WHERE id = ?",
+            "SELECT plan_status, plan_body FROM conversations WHERE id = ?",
             (conversation_id,),
         ).fetchone()
         if row is None:
-            return False
-        return bool(row["plan_mode"])
+            return "off", ""
+        status = row["plan_status"] or "off"
+        if status not in {"off", "draft", "approved"}:
+            status = "off"
+        return status, row["plan_body"] or ""
+
+    def get_owned_plan(self, conversation_id: str, owner_id: str) -> tuple[str, str] | None:
+        row = self._conn.execute(
+            "SELECT owner_id FROM conversations WHERE id = ?",
+            (conversation_id,),
+        ).fetchone()
+        if row is None or row["owner_id"] != owner_id:
+            return None
+        return self.get_plan_state(conversation_id)
 
     def save_plan_mode(self, conversation_id: str, owner_id: str, enabled: bool) -> bool | None:
         row = self._conn.execute(
@@ -328,11 +413,61 @@ class SqliteRepository:
         if row is None or row["owner_id"] != owner_id:
             return None
         with self.transaction():
-            self._conn.execute(
-                "UPDATE conversations SET plan_mode = ? WHERE id = ?",
-                (1 if enabled else 0, conversation_id),
-            )
+            if enabled:
+                self._conn.execute(
+                    "UPDATE conversations SET plan_mode = 1, plan_status = 'draft', ask_mode = 0 WHERE id = ?",
+                    (conversation_id,),
+                )
+            else:
+                self._conn.execute(
+                    "UPDATE conversations SET plan_mode = 0, plan_status = 'off' WHERE id = ?",
+                    (conversation_id,),
+                )
         return enabled
+
+    def save_plan_body(self, conversation_id: str, owner_id: str, body: str) -> str | None:
+        owned = self.get_owned_plan(conversation_id, owner_id)
+        if owned is None:
+            return None
+        if owned[0] != "draft":
+            raise InputError("plan is not draft")
+        with self.transaction():
+            self._conn.execute(
+                "UPDATE conversations SET plan_body = ? WHERE id = ?",
+                (body, conversation_id),
+            )
+        return body
+
+    def approve_plan(self, conversation_id: str, owner_id: str) -> str | None:
+        owned = self.get_owned_plan(conversation_id, owner_id)
+        if owned is None:
+            return None
+        status, body = owned
+        if status not in {"draft", "approved"}:
+            raise InputError("plan is not draft")
+        if body.strip() == "":
+            raise InputError("empty plan")
+        with self.transaction():
+            self._conn.execute(
+                "UPDATE conversations SET plan_mode = 0, plan_status = 'approved' WHERE id = ?",
+                (conversation_id,),
+            )
+        return body
+
+    def finish_plan_turn(self, conversation_id: str, status_at_start: str, reply: str) -> None:
+        if status_at_start == "draft":
+            with self.transaction():
+                self._conn.execute(
+                    "UPDATE conversations SET plan_body = ? WHERE id = ?",
+                    (reply, conversation_id),
+                )
+            return
+        if status_at_start == "approved":
+            with self.transaction():
+                self._conn.execute(
+                    "UPDATE conversations SET plan_mode = 0, plan_status = 'off' WHERE id = ?",
+                    (conversation_id,),
+                )
 
     def get_task_for_owner(self, task_id: str, owner_id: str) -> Task | None:
         row = self._conn.execute(
@@ -1056,8 +1191,11 @@ class SqliteRepository:
               context_summary TEXT NOT NULL DEFAULT '',
               summary_until_task_id TEXT NOT NULL DEFAULT '',
               context_used_tokens INTEGER,
-              goal TEXT NOT NULL DEFAULT '',
-              plan_mode INTEGER NOT NULL DEFAULT 0
+              ask_mode INTEGER NOT NULL DEFAULT 0,
+              plan_mode INTEGER NOT NULL DEFAULT 0,
+              plan_status TEXT NOT NULL DEFAULT 'off',
+              plan_body TEXT NOT NULL DEFAULT '',
+              pinned_at TEXT
             );
             CREATE TABLE IF NOT EXISTS events (
               task_id TEXT NOT NULL,
@@ -1174,10 +1312,21 @@ class SqliteRepository:
             self._conn.execute("ALTER TABLE conversations ADD COLUMN summary_until_task_id TEXT NOT NULL DEFAULT ''")
         if "context_used_tokens" not in columns:
             self._conn.execute("ALTER TABLE conversations ADD COLUMN context_used_tokens INTEGER")
-        if "goal" not in columns:
-            self._conn.execute("ALTER TABLE conversations ADD COLUMN goal TEXT NOT NULL DEFAULT ''")
+        if "ask_mode" not in columns:
+            self._conn.execute("ALTER TABLE conversations ADD COLUMN ask_mode INTEGER NOT NULL DEFAULT 0")
         if "plan_mode" not in columns:
             self._conn.execute("ALTER TABLE conversations ADD COLUMN plan_mode INTEGER NOT NULL DEFAULT 0")
+        if "plan_body" not in columns:
+            self._conn.execute("ALTER TABLE conversations ADD COLUMN plan_body TEXT NOT NULL DEFAULT ''")
+        if "plan_status" not in columns:
+            self._conn.execute(
+                "ALTER TABLE conversations ADD COLUMN plan_status TEXT NOT NULL DEFAULT 'off'"
+            )
+            self._conn.execute(
+                "UPDATE conversations SET plan_status = 'draft' WHERE plan_mode = 1"
+            )
+        if "pinned_at" not in columns:
+            self._conn.execute("ALTER TABLE conversations ADD COLUMN pinned_at TEXT")
 
     def _adopt_unowned(self, admin_password: str | None) -> None:
         pending = self._conn.execute(
@@ -1199,6 +1348,10 @@ class SqliteRepository:
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _precise_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def _task(row: sqlite3.Row) -> Task:

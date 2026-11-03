@@ -132,7 +132,7 @@ def test_turn_injects_teaching_digest_for_conversation_owner(tmp_path):
     task = repo.submit_message(conversation_id, "帮我分析这次单元测验", user.id)
     seen = {}
 
-    def complete(messages, tools):
+    def complete(messages, tools, sink=None):
         seen["messages"] = messages
         return AssistantMessage(content="分析如下。", tool_calls=[])
 
@@ -153,7 +153,7 @@ def test_turn_without_teaching_data_keeps_single_system_message(tmp_path):
     task = repo.submit_message(conversation_id, "你好", user.id)
     seen = {}
 
-    def complete(messages, tools):
+    def complete(messages, tools, sink=None):
         seen["messages"] = messages
         return AssistantMessage(content="你好。", tool_calls=[])
 
@@ -361,5 +361,5 @@ def _two_teachers(tmp_path):
     return alice, bob
 
 
-def _ok(messages, tools):
+def _ok(messages, tools, sink=None):
     return AssistantMessage(content="好", tool_calls=[])

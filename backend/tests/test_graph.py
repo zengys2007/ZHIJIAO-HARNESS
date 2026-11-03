@@ -14,7 +14,7 @@ class Scripted:
         self._responses = list(responses)
         self.seen = []
 
-    def __call__(self, messages, tools):
+    def __call__(self, messages, tools, sink=None):
         self.seen.append((messages, tools))
         return self._responses.pop(0)
 
@@ -139,7 +139,7 @@ def test_the_seventh_model_request_is_not_sent(tmp_path):
         def __init__(self):
             self.calls = 0
 
-        def __call__(self, messages, tools):
+        def __call__(self, messages, tools, sink=None):
             self.calls += 1
             return AssistantMessage(
                 content="",

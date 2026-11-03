@@ -17,7 +17,7 @@ class GraphState(TypedDict):
     store: FileStore
     context_digest: str
     context_summary: str
-    context_goal: str
-    context_plan: bool
+    context_ask: str
+    context_plan: str
     prompt_tokens: int
     completion_tokens: int

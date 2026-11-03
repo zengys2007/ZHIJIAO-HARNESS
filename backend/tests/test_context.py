@@ -13,7 +13,7 @@ from app.context.compact import (
 )
 from app.graph.build import build_graph
 from app.llm.protocol import AssistantMessage
-from app.llm.usage import count_messages_locally, parse_context_limit, parse_input_tokens
+from app.llm.usage import count_messages_locally, parse_context_limit, parse_input_tokens, parse_output_limit
 from app.main import create_app
 from app.storage.files import FileStore
 from app.storage.repository import SqliteRepository
@@ -32,6 +32,11 @@ def test_parse_context_limit_reads_known_provider_fields():
     assert parse_context_limit(payload, "teacher-model") == 1_000_000
     assert parse_context_limit({"data": [{"id": "teacher-model", "context_length": 500_000}]}, "teacher-model") == 500_000
     assert parse_context_limit({"data": [{"id": "teacher-model"}]}, "teacher-model") is None
+    assert parse_output_limit(
+        {"data": [{"id": "teacher-model", "max_completion_tokens": 128_000}]},
+        "teacher-model",
+    ) == 128_000
+    assert parse_output_limit({"data": [{"id": "teacher-model", "max_output_tokens": 8192}]}, "teacher-model") == 8192
     assert parse_input_tokens({"object": "response.input_tokens", "input_tokens": 42}) == 42
 
 
@@ -197,7 +202,7 @@ def test_run_turn_persists_the_summary_and_leaves_original_tasks(tmp_path):
     repo, store, conversation_id, owner_id = _conversation(tmp_path)
     replies = ["第一句。", "第二句。", "第三句。"]
 
-    def complete(messages, tools):
+    def complete(messages, tools, sink=None):
         if messages and messages[0]["role"] == "user" and "CONTEXT CHECKPOINT" in messages[0]["content"]:
             return AssistantMessage(content="摘要：前两轮已讲完。", tool_calls=[])
         return AssistantMessage(content=replies.pop(0), tool_calls=[], prompt_tokens=11, completion_tokens=4)
@@ -233,7 +238,7 @@ def test_run_turn_persists_the_summary_and_leaves_original_tasks(tmp_path):
 def test_conversation_payload_reports_context_usage(tmp_path):
     from app.llm.protocol import AssistantMessage as Message
 
-    def complete(messages, tools):
+    def complete(messages, tools, sink=None):
         return Message(content="记下了。", tool_calls=[], prompt_tokens=20, completion_tokens=5)
 
     client = TestClient(create_app(Settings(data_dir=tmp_path, auth_secret="test-secret-value"), complete=complete))
@@ -249,7 +254,7 @@ def test_conversation_payload_reports_context_usage(tmp_path):
         "tools",
         "context",
         "summary",
-        "goal",
+        "ask",
         "plan",
         "conversation",
     ]
@@ -261,7 +266,7 @@ def test_conversation_payload_reports_context_usage(tmp_path):
     context = client.get(f"/api/conversations/{conversation_id}").json()["context"]
     assert context["used_tokens"] == 25
     assert context["compressed"] is False
-    assert OUTPUT_RESERVE == 2000
+    assert OUTPUT_RESERVE == 128_000
 
 
 def _summarize_with(complete):

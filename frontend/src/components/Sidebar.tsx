@@ -17,6 +17,8 @@ type SidebarProps = {
   onOpenTeaching: () => void;
   onNew: () => void;
   onSelect: (id: string) => void;
+  onPin: (id: string, pinned: boolean) => Promise<void>;
+  onDelete: (id: string) => Promise<void>;
   onOpenSettings: () => void;
   onCloseSettings: () => void;
   /** 头像菜单里的切换账号 */
@@ -39,6 +41,8 @@ export function Sidebar({
   onOpenTeaching,
   onNew,
   onSelect,
+  onPin,
+  onDelete,
   onOpenSettings,
   onCloseSettings,
   onSwitchAccount,
@@ -82,9 +86,11 @@ export function Sidebar({
           loggedIn={loggedIn}
           teachingOpen={teachingOpen}
           onOpenTeaching={onOpenTeaching}
-          onNew={onNew}
-          onSelect={onSelect}
-        />
+        onNew={onNew}
+        onSelect={onSelect}
+        onPin={onPin}
+        onDelete={onDelete}
+      />
       )}
       <div className="account-inline" ref={accountRef}>
         <button
@@ -166,6 +172,8 @@ function ChatNav({
   onOpenTeaching,
   onNew,
   onSelect,
+  onPin,
+  onDelete,
 }: {
   sessions: SessionSummary[];
   activeId: string | null;
@@ -176,8 +184,61 @@ function ChatNav({
   onOpenTeaching: () => void;
   onNew: () => void;
   onSelect: (id: string) => void;
+  onPin: (id: string, pinned: boolean) => Promise<void>;
+  onDelete: (id: string) => Promise<void>;
 }) {
   const { t } = useAppearance();
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const menuRef = useRef<HTMLLIElement | null>(null);
+  const cancelRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    if (!openId) return;
+    const handleDoc = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) setOpenId(null);
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpenId(null);
+    };
+    document.addEventListener("mousedown", handleDoc);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleDoc);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [openId]);
+
+  useEffect(() => {
+    if (!confirmId) return;
+    cancelRef.current?.focus();
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !deleting) {
+        setConfirmId(null);
+        setDeleteError(null);
+      }
+    };
+    document.addEventListener("keydown", handleKey);
+    return () => document.removeEventListener("keydown", handleKey);
+  }, [confirmId, deleting]);
+
+  async function confirmDelete() {
+    if (!confirmId || deleting) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await onDelete(confirmId);
+      setConfirmId(null);
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : t("systemError"));
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   return (
     <>
       <div className="brand-row">
@@ -208,23 +269,132 @@ function ChatNav({
           <p className="empty-list">{t("noSessions")}</p>
         ) : (
           <ul className="session-list">
-            {sessions.map((session) => (
-              <li key={session.id}>
-                <button
-                  className="session"
-                  type="button"
-                  aria-current={session.id === activeId ? "page" : undefined}
-                  title={session.title}
-                  disabled={busy}
-                  onClick={() => onSelect(session.id)}
-                >
-                  {session.title}
-                </button>
-              </li>
-            ))}
+            {sessions.map((session) => {
+              const menuOpen = openId === session.id;
+              const deleteLocked = busy && session.id === activeId;
+              return (
+                <li key={session.id} ref={menuOpen ? menuRef : undefined}>
+                  <button
+                    className="session"
+                    type="button"
+                    aria-current={session.id === activeId ? "page" : undefined}
+                    title={session.title}
+                    disabled={busy}
+                    onClick={() => onSelect(session.id)}
+                  >
+                    {session.pinned ? <PinMark /> : null}
+                    <span className="session-title">{session.title}</span>
+                  </button>
+                  {loggedIn && !preview ? (
+                    <button
+                      className="session-more"
+                      type="button"
+                      aria-label={t("sessionActions")}
+                      aria-haspopup="menu"
+                      aria-expanded={menuOpen}
+                      onClick={(event) => {
+                        if (menuOpen) {
+                          setOpenId(null);
+                          return;
+                        }
+                        const rect = event.currentTarget.getBoundingClientRect();
+                        const menuHeight = 88;
+                        const top =
+                          rect.bottom + menuHeight > window.innerHeight ? rect.top - menuHeight - 4 : rect.bottom + 4;
+                        setMenuPos({ top, left: Math.max(8, rect.right - 148) });
+                        setOpenId(session.id);
+                      }}
+                    >
+                      <MoreIcon />
+                    </button>
+                  ) : null}
+                  {menuOpen ? (
+                    <div
+                      className="session-menu"
+                      role="menu"
+                      aria-label={t("sessionActions")}
+                      style={menuPos ? { position: "fixed", top: menuPos.top, left: menuPos.left } : undefined}
+                    >
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="session-menu-item"
+                        onClick={() => {
+                          setOpenId(null);
+                          void onPin(session.id, !session.pinned);
+                        }}
+                      >
+                        <PinMark />
+                        {session.pinned ? t("unpin") : t("pin")}
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="session-menu-item is-danger"
+                        disabled={deleteLocked}
+                        title={deleteLocked ? t("deleteBusy") : undefined}
+                        onClick={() => {
+                          setOpenId(null);
+                          setDeleteError(null);
+                          setConfirmId(session.id);
+                        }}
+                      >
+                        {t("deleteSession")}
+                      </button>
+                    </div>
+                  ) : null}
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>
+      {confirmId ? (
+        <div
+          className="confirm-layer"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !deleting) {
+              setConfirmId(null);
+              setDeleteError(null);
+            }
+          }}
+        >
+          <div
+            className="confirm-card"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-session-title"
+          >
+            <h2 id="delete-session-title">{t("deleteSessionTitle")}</h2>
+            <p>{t("deleteSessionBody")}</p>
+            {deleteError ? <p className="confirm-error">{deleteError}</p> : null}
+            <div className="confirm-actions">
+              <button
+                ref={cancelRef}
+                className="confirm-cancel"
+                type="button"
+                disabled={deleting}
+                onClick={() => {
+                  setConfirmId(null);
+                  setDeleteError(null);
+                }}
+              >
+                {t("cancel")}
+              </button>
+              <button
+                className="confirm-delete"
+                type="button"
+                disabled={deleting}
+                onClick={() => {
+                  void confirmDelete();
+                }}
+              >
+                {deleting ? t("deletingSession") : t("deleteSession")}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }
@@ -323,6 +493,31 @@ function ConnectionsIcon() {
       <circle cx="17" cy="7" r="2.2" fill="none" stroke="currentColor" strokeWidth="1.8" />
       <circle cx="17" cy="17" r="2.2" fill="none" stroke="currentColor" strokeWidth="1.8" />
       <path d="M9.1 11.2 14.8 8.1M9.1 12.8l5.7 3.1" fill="none" stroke="currentColor" strokeWidth="1.8" />
+    </svg>
+  );
+}
+
+function PinMark() {
+  return (
+    <svg className="session-pin" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false">
+      <path
+        d="M9 4.5h6l-1 5.2 3 2.8v2H7v-2l3-2.8-1-5.2Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+      />
+      <path d="M12 14.5v5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function MoreIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+      <circle cx="6" cy="12" r="1.4" fill="currentColor" />
+      <circle cx="12" cy="12" r="1.4" fill="currentColor" />
+      <circle cx="18" cy="12" r="1.4" fill="currentColor" />
     </svg>
   );
 }

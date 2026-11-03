@@ -15,7 +15,7 @@ class Scripted:
         self._responses = list(responses)
         self.calls = 0
 
-    def __call__(self, messages, tools):
+    def __call__(self, messages, tools, sink=None):
         self.calls += 1
         return self._responses.pop(0)
 
@@ -114,7 +114,7 @@ def test_step_limit_without_a_candidate_fails(tmp_path):
         def __init__(self):
             self.calls = 0
 
-        def __call__(self, messages, tools):
+        def __call__(self, messages, tools, sink=None):
             self.calls += 1
             return AssistantMessage(
                 content="",

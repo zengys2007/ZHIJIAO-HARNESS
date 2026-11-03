@@ -1,7 +1,7 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
-import type { AuthUser, ConversationApi, ConversationMessage, TaskSnapshot } from "../types/api";
+import type { AuthUser, ConversationApi, ConversationMessage, PlanStatus, StreamEvent, TaskSnapshot } from "../types/api";
 import type { GoalsApi } from "../types/goals";
 import { ApiRequestError, DisconnectError, type ProbeRequest } from "../api/http";
 import { Workbench } from "./Workbench";
@@ -244,6 +244,75 @@ describe("工作台", () => {
     expect(screen.getByRole("button", { name: "发送" })).toHaveProperty("disabled", true);
   });
 
+  it("流式回复逐段出现，结束后改成已保存的整段", async () => {
+    const user = userEvent.setup();
+    const taskId = "fedcba9876543210fedcba9876543210";
+    let release: () => void = () => {};
+    const opened = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const api = streamingApi(taskId, async function* () {
+      yield { event: "delta", text: "可以" };
+      await opened;
+      yield { event: "reset" };
+      yield { event: "delta", text: "可以先举一个例子。" };
+      yield { event: "done" };
+    }, "可以先举一个例子。");
+    renderLoggedIn({ api });
+
+    await screen.findByRole("button", { name: "发送" });
+    await user.type(screen.getByRole("textbox", { name: "消息" }), "这节课怎么讲通分");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    expect(await screen.findByText("可以")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "正在回复" })).toHaveProperty("disabled", true);
+    release();
+    expect(await screen.findByText("可以先举一个例子。")).toBeTruthy();
+    expect(screen.queryByText("可以")).toBeNull();
+  });
+
+  it("流式失败时去掉草稿并显示错误", async () => {
+    const user = userEvent.setup();
+    const taskId = "fedcba9876543210fedcba9876543211";
+    const api = streamingApi(taskId, async function* () {
+      yield { event: "delta", text: "半段" };
+      yield {
+        event: "error",
+        code: "model_timeout",
+        message: "模型响应超时，可以再发一次。",
+        retryable: true,
+      };
+    }, null);
+    renderLoggedIn({ api });
+
+    await screen.findByRole("button", { name: "发送" });
+    await user.type(screen.getByRole("textbox", { name: "消息" }), "再具体一点");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    expect((await screen.findByRole("alert")).textContent).toContain("模型响应超时，可以再发一次。");
+    expect(screen.queryByText("半段")).toBeNull();
+  });
+
+  it("文字流中断后改回轮询并显示已保存回复", async () => {
+    const user = userEvent.setup();
+    const taskId = "fedcba9876543210fedcba9876543210";
+    let opens = 0;
+    const api = streamingApi(taskId, async function* () {
+      opens += 1;
+      if (opens === 1) yield { event: "delta", text: "半" };
+    }, "完整回复");
+    api.getTask = async () => (opens >= 2 ? succeeded("完整回复") : { ...succeeded("完整回复"), status: "running", reply: null });
+    renderLoggedIn({ api });
+
+    await screen.findByRole("button", { name: "发送" });
+    await user.type(screen.getByRole("textbox", { name: "消息" }), "这节课怎么讲通分");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    expect(await screen.findByText("完整回复")).toBeTruthy();
+    expect(screen.queryByText("半")).toBeNull();
+    expect(opens).toBe(2);
+  });
+
   it("超过 4000 字仍会发送", async () => {
     const user = userEvent.setup();
     let sent = 0;
@@ -304,8 +373,10 @@ describe("工作台", () => {
     const mark = document.querySelector(".composer .composer-plan");
     expect(mark?.textContent).toBe("plan");
     expect(document.querySelector(".composer-footer .composer-plan")).toBeNull();
-    expect(screen.getAllByRole("textbox").some((node) => node.getAttribute("aria-label") === "目标")).toBe(false);
+    expect(document.querySelector(".composer-ask")).toBeNull();
     expect(modes).toEqual([true]);
+    expect(screen.queryByRole("button", { name: "计划" })).toBeNull();
+    expect(screen.getAllByRole("button", { name: "新对话" }).length).toBeGreaterThan(1);
 
     await user.click(screen.getByRole("button", { name: "更多操作" }));
     await user.click(screen.getByRole("menuitem", { name: /计划/ }));
@@ -318,55 +389,143 @@ describe("工作台", () => {
     await user.click(screen.getByRole("textbox", { name: "消息" }));
     await user.keyboard("{Backspace}");
     expect(document.querySelector(".composer-plan")).toBeNull();
+    expect(document.querySelector(".plan-card")).toBeNull();
     expect(modes).toEqual([true, false, true, false]);
   });
 
-  it("加号菜单：目标在原输入框内联编辑，保存后可再打开查看，空退格退出不清除", async () => {
+  it("计划留在原输入框里，有正文后可在底栏按此生成", async () => {
     const user = userEvent.setup();
-    const goals: string[] = [];
-    const api = scriptedApi([Promise.resolve(succeeded("预览回复"))]);
-    const baseSetGoal = api.setGoal.bind(api);
-    api.setGoal = async (id, goal) => {
-      goals.push(goal);
-      return baseSetGoal(id, goal);
+    const api = scriptedApi([Promise.resolve(succeeded("三道练习"))]);
+    const sent: string[] = [];
+    const modes: boolean[] = [];
+    const baseSend = api.sendMessage.bind(api);
+    api.sendMessage = async (id, content) => {
+      sent.push(content);
+      return baseSend(id, content);
+    };
+    const basePlan = api.setPlanMode.bind(api);
+    api.setPlanMode = async (id, enabled) => {
+      modes.push(enabled);
+      return basePlan(id, enabled);
     };
     renderLoggedIn({ api });
     await screen.findByRole("button", { name: "发送" });
 
     await user.click(screen.getByRole("button", { name: "更多操作" }));
-    await user.click(screen.getByRole("menuitem", { name: /^目标 goal/ }));
+    await user.click(screen.getByRole("menuitem", { name: /计划/ }));
+    expect(document.querySelector(".plan-card")).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "计划正文" })).toBeNull();
+    expect(document.querySelector(".composer .composer-plan")?.textContent).toBe("plan");
+    expect(screen.queryByRole("button", { name: "先写计划" })).toBeNull();
+
+    const box = screen.getByRole("textbox", { name: "消息" });
+    await user.type(box, "先写计划");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+    expect(await screen.findByText("三道练习")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "先写计划" })).toBeTruthy();
+
+    const generate = screen.getByRole("button", { name: "按此生成" });
+    expect(generate.closest(".bubble.assistant")).toBeTruthy();
+    expect(generate.closest(".composer-footer")).toBeNull();
+    expect(screen.getByText("点选一套方案，再生成成品。")).toBeTruthy();
+    await user.click(generate);
+    expect(sent).toEqual(["先写计划", "请按已确认的计划生成成品。"]);
+    expect(screen.getByRole("button", { name: "先写计划" })).toBeTruthy();
+    expect(document.querySelector(".plan-card")).toBeNull();
+  });
+
+  it("计划里的每套方案可以单独选中再生成", async () => {
+    const user = userEvent.setup();
+    const reply = ["先看班级。", "", "方案 A：活动导入", "适合时间充裕。", "", "方案 B：精讲", "适合课时紧。", "", "推荐：方案 B"].join("\n");
+    const api = scriptedApi([
+      Promise.resolve(succeeded(reply)),
+      Promise.resolve({ ...succeeded("已按方案 A 生成。"), task_id: "fedcba9876543210fedcba9876543211" }),
+    ]);
+    const sent: string[] = [];
+    const saved: string[] = [];
+    const baseSend = api.sendMessage.bind(api);
+    api.sendMessage = async (id, content) => {
+      sent.push(content);
+      return baseSend(id, content);
+    };
+    const baseSave = api.savePlanBody.bind(api);
+    api.savePlanBody = async (id, body) => {
+      saved.push(body);
+      return baseSave(id, body);
+    };
+    renderLoggedIn({ api });
+    await screen.findByRole("button", { name: "发送" });
+
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    await user.click(screen.getByRole("menuitem", { name: /计划/ }));
+    await user.type(screen.getByRole("textbox", { name: "消息" }), "设计这节课");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    const second = await screen.findByRole("radio", { name: /方案 B/ });
+    expect((second as HTMLInputElement).checked).toBe(true);
+
+    const opener = screen
+      .getAllByRole("button", { name: "新对话" })
+      .find((button) => button.classList.contains("new-chat"));
+    await user.click(opener!);
+    expect(screen.queryByRole("radiogroup", { name: "方案" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "智教harness" })).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "设计这节课" }));
+    expect(await screen.findByRole("radio", { name: /方案 A/ })).toBeTruthy();
+    expect(screen.getByRole("radio", { name: /方案 B/ })).toBeTruthy();
+
+    await user.click(screen.getByRole("radio", { name: /方案 A/ }));
+    expect((screen.getByRole("radio", { name: /方案 A/ }) as HTMLInputElement).checked).toBe(true);
+    await user.click(screen.getByRole("button", { name: "按此生成" }));
+
+    expect(saved[0]).toContain("方案 A：活动导入");
+    expect(saved[0]).not.toContain("方案 B");
+    expect(sent[1]).toContain("选用：方案 A：活动导入");
+  });
+
+  it("加号菜单：提问在原输入框里显示灰色 ask，再点一次或空退格退出，并退出计划", async () => {
+    const user = userEvent.setup();
+    const asked: boolean[] = [];
+    const api = scriptedApi([Promise.resolve(succeeded("预览回复"))]);
+    const baseAsk = api.setAskMode.bind(api);
+    api.setAskMode = async (id, enabled) => {
+      asked.push(enabled);
+      return baseAsk(id, enabled);
+    };
+    renderLoggedIn({ api });
+    await screen.findByRole("button", { name: "发送" });
+
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    await user.click(screen.getByRole("menuitem", { name: /计划/ }));
+    expect(document.querySelector(".composer-plan")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    await user.click(screen.getByRole("menuitem", { name: /提问/ }));
 
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.queryByRole("status")).toBeNull();
-    expect(document.querySelector(".composer .composer-goal")?.textContent).toBe("goal");
-    expect(screen.getByRole("button", { name: "保存" })).toBeTruthy();
+    expect(document.querySelector(".composer .composer-ask")?.textContent).toBe("ask");
+    expect(document.querySelector(".composer-plan")).toBeNull();
+    expect(screen.getByRole("textbox", { name: "消息" })).toBeTruthy();
+    expect(asked).toEqual([true]);
 
-    const box = screen.getByRole("textbox", { name: "目标" });
-    await user.clear(box);
-    await user.type(box, "把异分母加减讲通");
-    await user.click(screen.getByRole("button", { name: "保存" }));
-
-    expect(goals).toEqual(["把异分母加减讲通"]);
-    expect(document.querySelector(".composer-goal")).toBeNull();
-    expect(screen.getByRole("button", { name: "发送" })).toBeTruthy();
+    const box = screen.getByRole("textbox", { name: "消息" });
+    await user.type(box, "异分母怎么讲");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+    expect(await screen.findByText("预览回复")).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "更多操作" }));
-    expect(screen.getByRole("menuitem", { name: /^目标 goal/ }).textContent).toContain("把异分母加减讲通");
-    await user.click(screen.getByRole("menuitem", { name: /^目标 goal/ }));
-    expect((screen.getByRole("textbox", { name: "目标" }) as HTMLTextAreaElement).value).toBe(
-      "把异分母加减讲通",
-    );
+    expect(screen.getByRole("menuitem", { name: /提问/ }).textContent).toContain("当前：提问");
+    await user.click(screen.getByRole("menuitem", { name: /提问/ }));
+    expect(document.querySelector(".composer-ask")).toBeNull();
+    expect(asked).toEqual([true, false]);
 
-    await user.clear(screen.getByRole("textbox", { name: "目标" }));
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    await user.click(screen.getByRole("menuitem", { name: /提问/ }));
+    await user.click(screen.getByRole("textbox", { name: "消息" }));
     await user.keyboard("{Backspace}");
-    expect(document.querySelector(".composer-goal")).toBeNull();
-    expect(goals).toEqual(["把异分母加减讲通"]);
-
-    await user.click(screen.getByRole("button", { name: "更多操作" }));
-    await user.click(screen.getByRole("menuitem", { name: /^目标 goal/ }));
-    expect((screen.getByRole("textbox", { name: "目标" }) as HTMLTextAreaElement).value).toBe(
-      "把异分母加减讲通",
-    );
+    expect(document.querySelector(".composer-ask")).toBeNull();
+    expect(asked).toEqual([true, false, true, false]);
   });
 
   it("加号菜单：未实现项点击后弹出尚未开放提示", async () => {
@@ -375,7 +534,8 @@ describe("工作台", () => {
     await screen.findByRole("button", { name: "发送" });
 
     await user.click(screen.getByRole("button", { name: "更多操作" }));
-    await user.click(screen.getByRole("menuitem", { name: /反馈/ }));
+    expect(screen.queryByRole("menuitem", { name: /反馈/ })).toBeNull();
+    await user.click(screen.getByRole("menuitem", { name: /压缩/ }));
 
     // 菜单关闭，出现 toast
     expect(screen.queryByRole("menu")).toBeNull();
@@ -641,6 +801,136 @@ describe("工作台", () => {
     expect(screen.getByRole("button", { name: "去注册" })).toBeTruthy();
   });
 
+  it("置顶排到前面，删除当前会话后回到空白", async () => {
+    const user = userEvent.setup();
+    const older = "0123456789abcdef0123456789abcdef";
+    const newer = "fedcba9876543210fedcba9876543210";
+    let conversations: import("../types/api").ConversationSummary[] = [
+      { conversation_id: newer, title: "新的课", created_at: "2026-11-03T02:00:00Z", pinned: false },
+      { conversation_id: older, title: "通分", created_at: "2026-11-03T01:00:00Z", pinned: false },
+    ];
+    const pins: Array<[string, boolean]> = [];
+    const deleted: string[] = [];
+    const api = immediateApi();
+    api.getConversation = async (id) => ({
+      conversation_id: id,
+      messages:
+        id === older
+          ? [
+              {
+                task_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                role: "user",
+                content: "怎么讲通分",
+                status: "succeeded",
+                created_at: "2026-11-03T01:00:01Z",
+              },
+            ]
+          : [],
+      ask_mode: false,
+      plan_mode: false,
+      plan_status: "off",
+      plan_body: "",
+    });
+    render(
+      <Workbench
+        api={api}
+        getCurrentUser={noopUser}
+        listConversationsAuth={async () => conversations.map((item) => ({ ...item }))}
+        pinConversation={async (id, pinned) => {
+          pins.push([id, pinned]);
+          conversations = conversations.map((item) => (item.conversation_id === id ? { ...item, pinned } : item));
+          conversations = [
+            ...conversations.filter((item) => item.pinned),
+            ...conversations.filter((item) => !item.pinned),
+          ];
+        }}
+        deleteConversation={async (id) => {
+          deleted.push(id);
+          conversations = conversations.filter((item) => item.conversation_id !== id);
+        }}
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: "新的课" })).toBeTruthy();
+    const olderRow = screen.getByRole("button", { name: "通分" }).closest("li");
+    if (!olderRow) throw new Error("missing conversation row");
+    await user.click(within(olderRow).getByRole("button", { name: "会话操作" }));
+    await user.click(screen.getByRole("menuitem", { name: "置顶" }));
+
+    await waitFor(() => expect(pins).toEqual([[older, true]]));
+    await waitFor(() => {
+      const titles = screen.getAllByRole("button", { name: /通分|新的课/ }).map((node) => node.textContent);
+      expect(titles[0]).toContain("通分");
+    });
+    expect(screen.getByRole("button", { name: "通分" }).querySelector(".session-pin")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "通分" }));
+    expect(await screen.findByText("怎么讲通分")).toBeTruthy();
+    const pinnedRow = screen.getByRole("button", { name: "通分" }).closest("li");
+    if (!pinnedRow) throw new Error("missing pinned row");
+    await user.click(within(pinnedRow).getByRole("button", { name: "会话操作" }));
+    await user.click(screen.getByRole("menuitem", { name: "删除" }));
+    expect(screen.getByRole("heading", { name: "删除这个会话？" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("heading", { name: "删除这个会话？" })).toBeNull();
+    expect(screen.getByText("怎么讲通分")).toBeTruthy();
+
+    await user.click(within(pinnedRow).getByRole("button", { name: "会话操作" }));
+    await user.click(screen.getByRole("menuitem", { name: "删除" }));
+    await user.click(screen.getByRole("button", { name: "删除" }));
+
+    await waitFor(() => expect(deleted).toEqual([older]));
+    expect(screen.queryByText("怎么讲通分")).toBeNull();
+    expect(screen.queryByRole("button", { name: "通分" })).toBeNull();
+    expect(screen.getByRole("button", { name: "新的课" })).toBeTruthy();
+    expect(await screen.findByText("用一句话说说这节课。回复会出现在这里。")).toBeTruthy();
+  });
+
+  it("删除失败时留在确认框里，回复进行中不能删除当前会话", async () => {
+    const user = userEvent.setup();
+    const current = "0123456789abcdef0123456789abcdef";
+    const api = immediateApi();
+    api.sendMessage = () => new Promise(() => undefined);
+    api.getConversation = async (id) => ({
+      conversation_id: id,
+      messages: [],
+      ask_mode: false,
+      plan_mode: false,
+      plan_status: "off",
+      plan_body: "",
+    });
+    render(
+      <Workbench
+        api={api}
+        getCurrentUser={noopUser}
+        listConversationsAuth={async () => [
+          { conversation_id: current, title: "通分", created_at: "2026-11-03T01:00:00Z", pinned: false },
+        ]}
+        deleteConversation={async () => {
+          throw new ApiRequestError("conflict", "这条会话还在回复，等它结束再删除。", false, 409);
+        }}
+      />,
+    );
+
+    const row = (await screen.findByRole("button", { name: "通分" })).closest("li");
+    if (!row) throw new Error("missing conversation row");
+    await user.click(within(row).getByRole("button", { name: "会话操作" }));
+    await user.click(screen.getByRole("menuitem", { name: "删除" }));
+    await user.click(screen.getByRole("button", { name: "删除" }));
+    expect(await screen.findByText("这条会话还在回复，等它结束再删除。")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "删除这个会话？" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "取消" }));
+
+    await user.click(screen.getByRole("button", { name: "通分" }));
+    await user.type(screen.getByRole("textbox", { name: "消息" }), "还在讲");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+    await user.click(within(row).getByRole("button", { name: "会话操作" }));
+    const remove = screen.getByRole("menuitem", { name: "删除" }) as HTMLButtonElement;
+    expect(remove.disabled).toBe(true);
+    expect(remove.getAttribute("title")).toBe("这条会话还在回复，等它结束再删除。");
+    expect((screen.getByRole("menuitem", { name: "置顶" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it("连不上后端时进入界面预览，发送后看到本地回复", async () => {
     const user = userEvent.setup();
     render(
@@ -727,11 +1017,70 @@ function immediateApi(): ConversationApi {
   return scriptedApi([Promise.resolve(succeeded("预览回复"))]);
 }
 
+function streamingApi(
+  taskId: string,
+  source: () => AsyncIterable<StreamEvent>,
+  reply: string | null,
+): ConversationApi {
+  const api = immediateApi();
+  let content = "";
+  let settled = false;
+  api.sendMessage = async (_conversationId, text) => {
+    content = text;
+    return { conversation_id: conversationId, task_id: taskId, status: "pending" };
+  };
+  api.streamTask = async function* () {
+    for await (const event of source()) {
+      if (event.event === "done" || event.event === "error") settled = true;
+      yield event;
+    }
+    settled = true;
+  };
+  api.getTask = async () => {
+    if (reply === null) return { ...failed("模型响应超时，可以再发一次。"), task_id: taskId };
+    if (!settled) return { ...succeeded(reply), task_id: taskId, status: "running", reply: null };
+    return { ...succeeded(reply), task_id: taskId };
+  };
+  api.getConversation = async () => {
+    const user: ConversationMessage = {
+      task_id: taskId,
+      role: "user",
+      content,
+      status: settled ? (reply === null ? "failed" : "succeeded") : "running",
+      created_at: "2026-10-21T10:00:00Z",
+      ...(settled && reply === null
+        ? { error: { code: "model_timeout", message: "模型响应超时，可以再发一次。", retryable: true } }
+        : {}),
+    };
+    const messages: ConversationMessage[] = [user];
+    if (settled && reply) {
+      messages.push({
+        task_id: taskId,
+        role: "assistant",
+        content: reply,
+        status: "succeeded",
+        created_at: "2026-10-21T10:00:01Z",
+      });
+    }
+    return {
+      conversation_id: conversationId,
+      messages,
+      ask_mode: false,
+      plan_mode: false,
+      plan_status: "off",
+      plan_body: "",
+    };
+  };
+  return api;
+}
+
 function scriptedApi(results: Array<Promise<TaskSnapshot>>): ConversationApi {
   const messages: ConversationMessage[] = [];
   let cursor = 0;
-  let goal = "";
+  let askMode = false;
   let planMode = false;
+  let planStatus: PlanStatus = "off";
+  let planBody = "";
   return {
     async createConversation() {
       return { conversation_id: conversationId };
@@ -756,24 +1105,63 @@ function scriptedApi(results: Array<Promise<TaskSnapshot>>): ConversationApi {
           status: "succeeded",
           created_at: createdAt,
         });
+        if (planStatus === "draft") planBody = task.reply;
+        if (planStatus === "approved") {
+          planStatus = "off";
+          planMode = false;
+        }
       }
       return { conversation_id: conversationId, task_id: task.task_id, status: "pending" };
     },
     async getConversation() {
-      return { conversation_id: conversationId, messages: messages.slice(), goal, plan_mode: planMode };
+      return {
+        conversation_id: conversationId,
+        messages: messages.slice(),
+        ask_mode: askMode,
+        plan_mode: planMode,
+        plan_status: planStatus,
+        plan_body: planBody,
+      };
     },
     async getTask() {
       return results[Math.min(cursor - 1, results.length - 1)];
     },
     async approveCall() {},
     async rejectCall() {},
-    async setGoal(_conversationId, next) {
-      goal = next.trim();
-      return { conversation_id: conversationId, goal };
+    async setAskMode(_conversationId, enabled) {
+      askMode = enabled;
+      if (enabled) {
+        planMode = false;
+        planStatus = "off";
+      }
+      return {
+        conversation_id: conversationId,
+        ask_mode: askMode,
+        plan_mode: planMode,
+        plan_status: planStatus,
+        plan_body: planBody,
+      };
     },
     async setPlanMode(_conversationId, enabled) {
       planMode = enabled;
-      return { conversation_id: conversationId, plan_mode: planMode };
+      planStatus = enabled ? "draft" : "off";
+      if (enabled) askMode = false;
+      return {
+        conversation_id: conversationId,
+        ask_mode: askMode,
+        plan_mode: planMode,
+        plan_status: planStatus,
+        plan_body: planBody,
+      };
+    },
+    async savePlanBody(_conversationId, body) {
+      planBody = body.trim();
+      return { conversation_id: conversationId, plan_mode: planStatus === "draft", plan_status: planStatus, plan_body: planBody };
+    },
+    async generatePlan() {
+      planStatus = "approved";
+      planMode = false;
+      return { conversation_id: conversationId, plan_mode: false, plan_status: planStatus, plan_body: planBody };
     },
   };
 }

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 import uvicorn
 
 from app.api.auth import (
@@ -30,8 +30,15 @@ from app.api.goals import (
     parse_update_tree,
     tree_view,
 )
-from app.api.messages import RequestError, parse_create_conversation, parse_goal, parse_message, parse_plan_mode
-from app.context.goal import GOAL_TOO_LARGE, goal_tokens
+from app.api.messages import (
+    RequestError,
+    parse_ask,
+    parse_create_conversation,
+    parse_message,
+    parse_pin,
+    parse_plan,
+)
+from app.context.plan import PLAN_EMPTY, PLAN_NOT_DRAFT, PLAN_TOO_LARGE, plan_tokens
 from app.api.probe import parse_probe
 from app.api.teaching import (
     parse_create_assignment,
@@ -55,8 +62,16 @@ from app.context.prompt import load_system_prompt
 from app.goals.templates import semester_seed
 from app.graph.build import build_graph
 from app.llm.complete import make_complete
+from app.llm.hub import encode_sse, hub
 from app.llm.probe import probe_chat
-from app.llm.usage import count_messages_locally, fetch_context_limit, fetch_input_tokens
+from app.llm.usage import (
+    DEFAULT_OUTPUT_LIMIT,
+    count_messages_locally,
+    fetch_input_tokens,
+    fetch_model_payload,
+    parse_context_limit,
+    parse_output_limit,
+)
 from app.preview.serve import load_preview
 from app.storage import open_repository
 from app.storage.files import FileStore
@@ -67,6 +82,7 @@ from app.teaching.insights import teaching_insights
 from app.tools.registry import production_registry
 
 _TASK_ID = re.compile(r"^[0-9a-f]{32}$")
+BUSY_DELETE = "这条会话还在回复，等它结束再删除。"
 
 
 def _tool_schema_tokens(registry) -> int:
@@ -87,12 +103,23 @@ def _exact_count(settings: Settings):
     return exact
 
 
-def _context_limit(settings: Settings) -> tuple[int, str]:
+def _model_limits(settings: Settings) -> tuple[int, str, int]:
+    context = settings.context_token_limit
+    source = "fallback"
+    output = DEFAULT_OUTPUT_LIMIT
     if settings.llm_base_url and settings.llm_api_key and settings.llm_model:
-        found = fetch_context_limit(settings)
-        if found:
-            return found, "provider"
-    return settings.context_token_limit, "fallback"
+        payload = fetch_model_payload(settings)
+        if payload is not None:
+            found_context = parse_context_limit(payload, settings.llm_model)
+            found_output = parse_output_limit(payload, settings.llm_model)
+            if found_context:
+                context = found_context
+                source = "provider"
+            if found_output:
+                output = found_output
+    if output > context:
+        output = context
+    return context, source, output
 
 
 def create_app(settings: Settings | None = None, complete=None, probe=None, env_file=None) -> FastAPI:
@@ -100,10 +127,11 @@ def create_app(settings: Settings | None = None, complete=None, probe=None, env_
     auth_secret = settings.auth_secret.strip()
     if len(auth_secret) < 16:
         raise RuntimeError("AUTH_SECRET must be at least 16 characters")
+    limit_tokens, limit_source, output_tokens = _model_limits(settings)
     if complete is None:
         if not settings.llm_api_key:
             raise RuntimeError("LLM_API_KEY is required")
-        complete = make_complete(settings)
+        complete = make_complete(settings, max_tokens=output_tokens)
     if probe is None:
         probe = probe_chat
     settings.data_dir.mkdir(parents=True, exist_ok=True)
@@ -113,11 +141,11 @@ def create_app(settings: Settings | None = None, complete=None, probe=None, env_
     registry = production_registry()
     system_prompt = load_system_prompt()
     graph = build_graph(registry, complete, system=system_prompt)
-    limit_tokens, limit_source = _context_limit(settings)
     turn_context = TurnContext(
         system=system_prompt,
         limit_tokens=limit_tokens,
         limit_source=limit_source,
+        output_reserve=output_tokens,
         count_tokens=count_messages_locally,
         summarize=make_summarizer(complete),
         exact_count=_exact_count(settings),
@@ -256,6 +284,7 @@ def create_app(settings: Settings | None = None, complete=None, probe=None, env_
                     "conversation_id": item.conversation_id,
                     "title": item.title,
                     "created_at": item.created_at,
+                    "pinned": item.pinned,
                 }
                 for item in conversations
             ]
@@ -278,6 +307,43 @@ def create_app(settings: Settings | None = None, complete=None, probe=None, env_
         except RequestError:
             return JSONResponse(error_payload("invalid_input"), status_code=400)
         return JSONResponse({"conversation_id": repository.create_conversation(user.id)}, status_code=201)
+
+    @app.put("/api/conversations/{conversation_id}/pin")
+    async def put_pin(conversation_id: str, request: Request):
+        user, denied = require_user(request)
+        if denied is not None:
+            return denied
+        if _TASK_ID.fullmatch(conversation_id) is None:
+            return JSONResponse(error_payload("not_found"), status_code=404)
+        try:
+            body = json.loads(await request.body() or b"null")
+        except json.JSONDecodeError:
+            return JSONResponse(error_payload("invalid_input"), status_code=400)
+        try:
+            pinned = parse_pin(body)
+        except RequestError:
+            return JSONResponse(error_payload("invalid_input"), status_code=400)
+        saved = repository.set_pinned(conversation_id, user.id, pinned)
+        if saved is None:
+            return JSONResponse(error_payload("not_found"), status_code=404)
+        return {"conversation_id": conversation_id, "pinned": saved}
+
+    @app.delete("/api/conversations/{conversation_id}")
+    def delete_conversation(conversation_id: str, request: Request):
+        user, denied = require_user(request)
+        if denied is not None:
+            return denied
+        if _TASK_ID.fullmatch(conversation_id) is None:
+            return JSONResponse(error_payload("not_found"), status_code=404)
+        try:
+            artifact_ids = repository.delete_conversation(conversation_id, user.id)
+        except NotFoundError:
+            return JSONResponse(error_payload("not_found"), status_code=404)
+        except ConflictError:
+            return JSONResponse(error_payload("conflict", BUSY_DELETE), status_code=409)
+        for artifact_id in artifact_ids:
+            store.remove_artifact(artifact_id)
+        return Response(status_code=204)
 
     @app.post("/api/conversations/{conversation_id}/messages")
     async def create_message(conversation_id: str, request: Request):
@@ -325,8 +391,18 @@ def create_app(settings: Settings | None = None, complete=None, probe=None, env_
             status_code=202,
         )
 
-    @app.put("/api/conversations/{conversation_id}/goal")
-    async def put_goal(conversation_id: str, request: Request):
+    def _mode_payload(conversation_id: str) -> dict:
+        plan_status, plan_body = repository.get_plan_state(conversation_id)
+        return {
+            "conversation_id": conversation_id,
+            "ask_mode": repository.get_ask_mode(conversation_id),
+            "plan_mode": plan_status == "draft",
+            "plan_status": plan_status,
+            "plan_body": plan_body,
+        }
+
+    @app.put("/api/conversations/{conversation_id}/ask")
+    async def put_ask(conversation_id: str, request: Request):
         user, denied = require_user(request)
         if denied is not None:
             return denied
@@ -337,15 +413,13 @@ def create_app(settings: Settings | None = None, complete=None, probe=None, env_
         except json.JSONDecodeError:
             return JSONResponse(error_payload("invalid_input"), status_code=400)
         try:
-            goal = parse_goal(body)
+            enabled = parse_ask(body)
         except RequestError:
             return JSONResponse(error_payload("invalid_input"), status_code=400)
-        if goal and goal_tokens(goal, turn_context.count_tokens) > turn_context.limit_tokens - turn_context.output_reserve:
-            return JSONResponse(error_payload("invalid_input", GOAL_TOO_LARGE), status_code=400)
-        saved = repository.save_goal(conversation_id, user.id, goal)
+        saved = repository.save_ask_mode(conversation_id, user.id, enabled)
         if saved is None:
             return JSONResponse(error_payload("not_found"), status_code=404)
-        return {"conversation_id": conversation_id, "goal": saved}
+        return _mode_payload(conversation_id)
 
     @app.put("/api/conversations/{conversation_id}/plan")
     async def put_plan(conversation_id: str, request: Request):
@@ -359,13 +433,34 @@ def create_app(settings: Settings | None = None, complete=None, probe=None, env_
         except json.JSONDecodeError:
             return JSONResponse(error_payload("invalid_input"), status_code=400)
         try:
-            enabled = parse_plan_mode(body)
+            parsed = parse_plan(body)
         except RequestError:
             return JSONResponse(error_payload("invalid_input"), status_code=400)
-        saved = repository.save_plan_mode(conversation_id, user.id, enabled)
-        if saved is None:
+        owned = repository.get_owned_plan(conversation_id, user.id)
+        if owned is None:
             return JSONResponse(error_payload("not_found"), status_code=404)
-        return {"conversation_id": conversation_id, "plan_mode": saved}
+        kind = parsed["kind"]
+        if kind == "mode":
+            repository.save_plan_mode(conversation_id, user.id, parsed["enabled"])
+        elif kind == "body":
+            text = parsed["body"]
+            if text and plan_tokens("draft", text, turn_context.count_tokens) > turn_context.limit_tokens - turn_context.output_reserve:
+                return JSONResponse(error_payload("invalid_input", PLAN_TOO_LARGE), status_code=400)
+            try:
+                repository.save_plan_body(conversation_id, user.id, text)
+            except InputError:
+                return JSONResponse(error_payload("invalid_input", PLAN_NOT_DRAFT), status_code=400)
+        else:
+            _status, current = owned
+            if current.strip() == "":
+                return JSONResponse(error_payload("invalid_input", PLAN_EMPTY), status_code=400)
+            if plan_tokens("approved", current, turn_context.count_tokens) > turn_context.limit_tokens - turn_context.output_reserve:
+                return JSONResponse(error_payload("invalid_input", PLAN_TOO_LARGE), status_code=400)
+            try:
+                repository.approve_plan(conversation_id, user.id)
+            except InputError:
+                return JSONResponse(error_payload("invalid_input", PLAN_NOT_DRAFT), status_code=400)
+        return _mode_payload(conversation_id)
 
     @app.get("/api/conversations/{conversation_id}")
     def read_conversation(conversation_id: str, request: Request):
@@ -378,8 +473,7 @@ def create_app(settings: Settings | None = None, complete=None, probe=None, env_
         if tasks is None:
             return JSONResponse(error_payload("not_found"), status_code=404)
         payload = conversation_payload(conversation_id, tasks)
-        payload["goal"] = repository.get_goal(conversation_id)
-        payload["plan_mode"] = repository.get_plan_mode(conversation_id)
+        payload.update(_mode_payload(conversation_id))
         payload["context"] = context_view(repository, conversation_id, turn_context)
         return payload
 
@@ -394,6 +488,27 @@ def create_app(settings: Settings | None = None, complete=None, probe=None, env_
         if task is None:
             return JSONResponse(error_payload("not_found"), status_code=404)
         return task_payload(repository, task)
+
+    @app.get("/api/tasks/{task_id}/stream")
+    def stream_task(task_id: str, request: Request):
+        user, denied = require_user(request)
+        if denied is not None:
+            return denied
+        if _TASK_ID.fullmatch(task_id) is None:
+            return JSONResponse(error_payload("not_found"), status_code=404)
+        task = repository.get_task_for_owner(task_id, user.id)
+        if task is None:
+            return JSONResponse(error_payload("not_found"), status_code=404)
+
+        def body():
+            for event, data in hub.iter_events(task_id, lambda: repository.get_task(task_id)):
+                yield encode_sse(event, data)
+
+        return StreamingResponse(
+            body(),
+            media_type="text/event-stream; charset=utf-8",
+            headers={"Cache-Control": "no-cache"},
+        )
 
     @app.post("/api/llm/probe")
     async def probe_model(request: Request):

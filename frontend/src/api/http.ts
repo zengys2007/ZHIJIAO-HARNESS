@@ -1,10 +1,14 @@
+import { parseSseChunk } from "../lib/sse";
 import type {
   ApiErrorBody,
   AuthResult,
   AuthUser,
   ConversationApi,
+  PlanSnapshot,
+  PlanStatus,
   ConversationMessage,
   ConversationSummary,
+  StreamEvent,
   TaskSnapshot,
   TaskStatus,
   TeachingApi,
@@ -60,25 +64,44 @@ export const httpApi: ConversationApi = {
       conversation_id: readId(body, "conversation_id"),
       messages: readMessages(body),
       context: readContext(body),
-      goal: readGoal(body),
-      plan_mode: readPlanMode(body),
+      ask_mode: readAskMode(body),
+      ...readPlan(body),
     };
   },
-  setGoal: async (conversationId, goal) => {
-    const body = await request(`/api/conversations/${conversationId}/goal`, {
+  setAskMode: async (conversationId, askMode) => {
+    const body = await request(`/api/conversations/${conversationId}/ask`, {
       method: "PUT",
-      body: JSON.stringify({ goal }),
+      body: JSON.stringify({ ask_mode: askMode }),
     });
-    return { conversation_id: readId(body, "conversation_id"), goal: readGoal(body) };
+    return {
+      conversation_id: readId(body, "conversation_id"),
+      ask_mode: readAskMode(body),
+      ...readPlan(body),
+    };
   },
   setPlanMode: async (conversationId, planMode) => {
     const body = await request(`/api/conversations/${conversationId}/plan`, {
       method: "PUT",
       body: JSON.stringify({ plan_mode: planMode }),
     });
-    return { conversation_id: readId(body, "conversation_id"), plan_mode: readPlanMode(body) };
+    return { conversation_id: readId(body, "conversation_id"), ...readPlan(body) };
+  },
+  savePlanBody: async (conversationId, planBody) => {
+    const body = await request(`/api/conversations/${conversationId}/plan`, {
+      method: "PUT",
+      body: JSON.stringify({ plan_body: planBody }),
+    });
+    return { conversation_id: readId(body, "conversation_id"), ...readPlan(body) };
+  },
+  generatePlan: async (conversationId) => {
+    const body = await request(`/api/conversations/${conversationId}/plan`, {
+      method: "PUT",
+      body: JSON.stringify({ action: "generate" }),
+    });
+    return { conversation_id: readId(body, "conversation_id"), ...readPlan(body) };
   },
   getTask: async (taskId) => readTask(await request(`/api/tasks/${taskId}`)),
+  streamTask: (taskId) => readTaskStream(taskId),
   // 生产后端暂未实现审批端点，stub：直接返回，不抛错，让 UI 能在预览模式下正常工作
   approveCall: async () => {},
   rejectCall: async () => {},
@@ -218,6 +241,17 @@ export async function logout(): Promise<void> {
   }
 }
 
+export async function pinConversation(conversationId: string, pinned: boolean): Promise<void> {
+  await request(`/api/conversations/${conversationId}/pin`, {
+    method: "PUT",
+    body: JSON.stringify({ pinned }),
+  });
+}
+
+export async function deleteConversation(conversationId: string): Promise<void> {
+  await request(`/api/conversations/${conversationId}`, { method: "DELETE" });
+}
+
 export async function listConversations(): Promise<ConversationSummary[]> {
   const body = await request("/api/conversations");
   const record = recordOf(body) as { conversations?: unknown };
@@ -229,6 +263,7 @@ export async function listConversations(): Promise<ConversationSummary[]> {
         conversation_id: typeof r.conversation_id === "string" && ID.test(r.conversation_id) ? r.conversation_id : "",
         title: typeof r.title === "string" ? r.title : "新对话",
         created_at: typeof r.created_at === "string" ? r.created_at : "",
+        pinned: r.pinned === true,
       };
     })
     .filter((c) => c.conversation_id.length > 0);
@@ -391,6 +426,42 @@ function readAuthUser(body: unknown): AuthUser {
   };
 }
 
+async function* readTaskStream(taskId: string): AsyncGenerator<StreamEvent> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/tasks/${taskId}/stream`, {
+      credentials: "include",
+      headers: { Accept: "text/event-stream" },
+    });
+  } catch (error) {
+    if (error instanceof TypeError) throw new DisconnectError();
+    throw error;
+  }
+  if (!response.ok || response.body === null) {
+    const text = await response.text();
+    if (response.status >= 500) throw new DisconnectError();
+    const error = readError(parseBody(text, response.status));
+    throw new ApiRequestError(
+      error?.code ?? "internal",
+      error?.message ?? "系统出错了，可以再发一次。",
+      error?.retryable ?? true,
+      response.status,
+    );
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = "";
+  while (true) {
+    const chunk = await reader.read();
+    pending += decoder.decode(chunk.value ?? new Uint8Array(), { stream: !chunk.done });
+    if (chunk.done && pending.trim() !== "") pending += "\n\n";
+    const parsed = parseSseChunk(pending);
+    pending = parsed.rest;
+    for (const event of parsed.events) yield event;
+    if (chunk.done) return;
+  }
+}
+
 function parseBody(text: string, status: number): unknown {
   if (!text) return null;
   try {
@@ -422,13 +493,17 @@ function readId(body: unknown, field: string): string {
   return value;
 }
 
-function readGoal(body: unknown): string {
-  const goal = recordOf(body).goal;
-  return typeof goal === "string" ? goal : "";
+function readAskMode(body: unknown): boolean {
+  return recordOf(body).ask_mode === true;
 }
 
-function readPlanMode(body: unknown): boolean {
-  return recordOf(body).plan_mode === true;
+function readPlan(body: unknown): Omit<PlanSnapshot, "conversation_id"> {
+  const record = recordOf(body);
+  const raw = record.plan_status;
+  const plan_status: PlanStatus =
+    raw === "draft" || raw === "approved" || raw === "off" ? raw : record.plan_mode === true ? "draft" : "off";
+  const plan_body = typeof record.plan_body === "string" ? record.plan_body : "";
+  return { plan_mode: plan_status === "draft", plan_status, plan_body };
 }
 
 function readContext(body: unknown) {
@@ -443,6 +518,7 @@ function readContext(body: unknown) {
     used_tokens: Math.max(0, Math.floor(used)),
     limit_tokens: Math.floor(limit),
     limit_source: source as "provider" | "fallback",
+    output_tokens: typeof record.output_tokens === "number" ? Math.max(0, Math.floor(record.output_tokens)) : undefined,
     compressed: record.compressed === true,
     parts: readContextParts(record.parts),
   };

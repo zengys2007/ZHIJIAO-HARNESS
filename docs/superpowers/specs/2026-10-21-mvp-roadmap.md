@@ -166,7 +166,7 @@ complete(messages, tools) ->
 
 `messages` 的 `role` 只使用 `system`、`user`、`assistant`、`tool`。`tools` 缺省为空。注册表为空时省略该字段。`tool_calls` 里每一项有 `id`、`name` 和 JSON 对象参数。
 
-传输用 Chat Completions 兼容协议：`POST {LLM_BASE_URL}/chat/completions`。正文含 `model`、`messages`、`temperature`、`max_tokens`，`stream` 为 false。注册表非空时才加入 `tools`。`temperature` 为 0.2。`max_tokens` 为 2000。
+传输用 Chat Completions 兼容协议：`POST {LLM_BASE_URL}/chat/completions`。正文含 `model`、`messages`、`temperature`、`max_tokens`，`stream` 为 false。注册表非空时才加入 `tools`。`temperature` 为 0.2。`max_tokens` 用供应商模型信息里的最大输出（`max_completion_tokens`、`max_output_tokens` 或 `output_token_limit`）。读不到时用 128000，并且不超过上下文窗口。
 
 只读取第一条候选的 `content` 和 `tool_calls`。供应商若要求工具调用走另一套字段，适配层在返回前归一成上面的结构。业务代码不引用供应商 SDK。
 
@@ -198,7 +198,7 @@ complete(messages, tools) ->
 | `prompts/system.md` | 不按字数限制。空文件拒绝启动 | 与工具说明一起计入上下文 token。快满时压缩对话，不在启动时按字数截断 |
 | 全部工具的 description 与 schema | 不按字数限制。空注册表不占额度 | 计入同一次请求的 token。说明过长时少挂工具或等用到再加载，不在启动时按合计字数拒绝 |
 | 单条教师消息 | 不按字数拒绝。空消息拒绝 | 整段上下文达到窗口的 90% 或放不下输出预留时，压缩更早的成功轮。这一句本身仍放不下时，模型看到的是这句的交接摘要，原文仍保存在会话里 |
-| 已成功对话 | 模型窗口的 90%，并预留 2000 token 给输出。窗口来自供应商，读不到时默认 1000000 | 更早的成功轮换成入库的交接摘要，最近不超过 20000 token 的整轮原文保留。当前这句不丢。摘要失败时只从模型输入丢掉最旧的整轮 |
+| 已成功对话 | 模型窗口的 90%，并预留最大输出 token。窗口和最大输出来自供应商，读不到时窗口默认 1000000、输出默认 128000 | 更早的成功轮换成入库的交接摘要，最近不超过 20000 token 的整轮原文保留。当前这句不丢。摘要失败时只从模型输入丢掉最旧的整轮 |
 
 ## 9. API
 

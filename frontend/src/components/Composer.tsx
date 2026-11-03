@@ -18,10 +18,10 @@ type ComposerProps = {
   planMode?: boolean;
   /** 输入框无内容时按退格，退出计划模式 */
   onExitPlan?: () => void;
-  /** 目标内联编辑。打开时在原输入框内显示灰色 goal，提交保存目标 */
-  goalEditMode?: boolean;
-  /** 输入框无内容时按退格，退出目标编辑（不提交） */
-  onExitGoal?: () => void;
+  /** 提问模式。打开时在原输入框内显示灰色 ask */
+  askMode?: boolean;
+  /** 输入框无内容时按退格，退出提问模式 */
+  onExitAsk?: () => void;
 };
 
 export function Composer({
@@ -36,15 +36,12 @@ export function Composer({
   contextSlot,
   planMode = false,
   onExitPlan,
-  goalEditMode = false,
-  onExitGoal,
+  askMode = false,
+  onExitAsk,
 }: ComposerProps) {
   const { t } = useAppearance();
-  const canSend = goalEditMode ? !busy : !busy && value.trim().length > 0;
-  const fieldLabel = goalEditMode ? t("goal") : t("message");
-  const placeholder = goalEditMode ? t("goalPlaceholder") : t("draftPlaceholder");
-  const submitLabel = busy ? t("replying") : goalEditMode ? t("save") : t("send");
-  const hint = goalEditMode ? t("goalHint") : t("enterHint");
+  const canSend = !busy && value.trim().length > 0;
+  const placeholder = askMode ? t("askPlaceholder") : planMode ? t("planPlaceholder") : t("draftPlaceholder");
 
   return (
     <div className="dock">
@@ -58,10 +55,10 @@ export function Composer({
       >
         <div className="composer-field">
           <label className="sr-only" htmlFor="draft">
-            {fieldLabel}
+            {t("message")}
           </label>
-          {planMode && !goalEditMode ? <span className="composer-plan">plan</span> : null}
-          {goalEditMode ? <span className="composer-goal">goal</span> : null}
+          {askMode ? <span className="composer-ask">ask</span> : null}
+          {planMode ? <span className="composer-plan">plan</span> : null}
           <textarea
             id="draft"
             name="content"
@@ -69,7 +66,7 @@ export function Composer({
             placeholder={placeholder}
             value={value}
             disabled={busy}
-            aria-label={fieldLabel}
+            aria-label={t("message")}
             onChange={(event) => onChange(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
@@ -78,9 +75,9 @@ export function Composer({
                 return;
               }
               if (event.key !== "Backspace" || value.length > 0) return;
-              if (goalEditMode && onExitGoal) {
+              if (askMode && onExitAsk) {
                 event.preventDefault();
-                onExitGoal();
+                onExitAsk();
                 return;
               }
               if (planMode && onExitPlan) {
@@ -91,7 +88,7 @@ export function Composer({
           />
         </div>
         <button className="send" type="submit" disabled={!canSend}>
-          {submitLabel}
+          {busy ? t("replying") : t("send")}
         </button>
       </form>
       {alert ? (
@@ -105,7 +102,7 @@ export function Composer({
             {approvalSegment}
           </div>
           <div className="composer-footer-right">
-            <p className="hint">{hint}</p>
+            <p className="hint">{t("enterHint")}</p>
             {contextSlot}
           </div>
         </div>

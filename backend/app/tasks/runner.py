@@ -13,11 +13,12 @@ from app.context.compact import (
     turns_after,
 )
 from app.context.assemble import context_messages
-from app.context.goal import goal_tokens
-from app.context.plan import plan_tokens
+from app.context.ask import ask_message, ask_tokens
+from app.context.plan import plan_message, plan_tokens
 from app.graph.build import invoke_graph
+from app.llm.hub import hub
 from app.llm.protocol import AssistantMessage
-from app.llm.usage import DEFAULT_LIMIT, count_messages_locally
+from app.llm.usage import DEFAULT_LIMIT, DEFAULT_OUTPUT_LIMIT, count_messages_locally
 from app.storage.files import FileStore
 from app.storage.protocol import Repository
 from app.tasks.states import FAILED, PENDING, RUNNING, SUCCEEDED
@@ -48,11 +49,13 @@ def run_turn(repo: Repository, store: FileStore, graph, task_id: str, turn_conte
     if task.status != PENDING:
         raise ValueError("task is not pending")
     repo.transition(task_id, RUNNING)
+    hub.open(task_id)
     repo.append_event(task_id, "user_message", {"content": task.raw_request})
     digest = _teaching_digest(repo, task.conversation_id, turn_context)
-    goal = repo.get_goal(task.conversation_id) if task.conversation_id else ""
-    plan = repo.get_plan_mode(task.conversation_id) if task.conversation_id else False
-    prior, summary, model_user = _prepare_prior(repo, task, digest, turn_context, goal, plan)
+    ask_mode, plan_status, plan_body = _ask_and_plan(repo, task.conversation_id)
+    prior, summary, model_user = _prepare_prior(
+        repo, task, digest, turn_context, ask_mode, plan_status, plan_body
+    )
     state = {
         "messages": [],
         "prior": prior,
@@ -64,8 +67,8 @@ def run_turn(repo: Repository, store: FileStore, graph, task_id: str, turn_conte
         "store": store,
         "context_digest": digest,
         "context_summary": summary,
-        "context_goal": goal,
-        "context_plan": plan,
+        "context_ask": ask_message(ask_mode),
+        "context_plan": plan_message(plan_status, plan_body),
         "prompt_tokens": 0,
         "completion_tokens": 0,
     }
@@ -88,6 +91,10 @@ def run_turn(repo: Repository, store: FileStore, graph, task_id: str, turn_conte
             repo.transition(task_id, SUCCEEDED, step_count=step_count, reply=reply)
         except Exception:
             _fail(repo, store, task_id, "storage_failed", step_count)
+            return
+        hub.succeed(task_id)
+        if task.conversation_id:
+            repo.finish_plan_turn(task.conversation_id, plan_status, reply)
         return
     last_assistant = next((item for item in reversed(result["messages"]) if item.get("role") == "assistant"), None)
     code = "step_limit" if last_assistant and last_assistant.get("tool_calls") else "model_invalid_output"
@@ -113,15 +120,23 @@ def context_view(repo: Repository, conversation_id: str, turn_context: TurnConte
     system = turn_context.system if turn_context else ""
     counter = turn_context.count_tokens if turn_context else count_messages_locally
     tools = turn_context.extra_tokens if turn_context else 0
-    goal = repo.get_goal(conversation_id)
-    plan = repo.get_plan_mode(conversation_id)
+    ask_mode, plan_status, plan_body = _ask_and_plan(repo, conversation_id)
     parts, local_total = _context_parts(
-        counter, system, digest, summary, turns_after(records, until), tools, goal, plan
+        counter,
+        system,
+        digest,
+        summary,
+        turns_after(records, until),
+        tools,
+        ask_mode,
+        plan_status,
+        plan_body,
     )
     return {
         "used_tokens": stored if stored is not None else local_total,
         "limit_tokens": limit,
         "limit_source": source,
+        "output_tokens": turn_context.output_reserve if turn_context else DEFAULT_OUTPUT_LIMIT,
         "compressed": bool(summary),
         "parts": parts,
     }
@@ -134,8 +149,9 @@ def _context_parts(
     summary: str,
     turns: list[TurnRecord],
     tools: int,
-    goal: str = "",
-    plan: bool = False,
+    ask_mode: bool = False,
+    plan_status: str = "off",
+    plan_body: str = "",
 ):
     system_msgs = [{"role": "system", "content": system}] if system else []
     digest_msgs = [{"role": "system", "content": digest}] if digest else []
@@ -144,21 +160,21 @@ def _context_parts(
     system_tokens = _span(counter, system_msgs)
     context_tokens = _delta(counter, system_msgs, digest_msgs)
     summary_tokens = _delta(counter, system_msgs + digest_msgs, summary_msgs)
-    goal_cost = goal_tokens(goal, counter)
-    plan_cost = plan_tokens(plan, counter)
+    ask_cost = ask_tokens(ask_mode, counter)
+    plan_cost = plan_tokens(plan_status, plan_body, counter)
     conversation_tokens = _delta(counter, system_msgs + digest_msgs + summary_msgs, conversation_msgs)
     parts = [
         {"name": "system", "tokens": system_tokens},
         {"name": "tools", "tokens": tools},
         {"name": "context", "tokens": context_tokens},
         {"name": "summary", "tokens": summary_tokens},
-        {"name": "goal", "tokens": goal_cost},
+        {"name": "ask", "tokens": ask_cost},
         {"name": "plan", "tokens": plan_cost},
         {"name": "conversation", "tokens": conversation_tokens},
     ]
     return (
         parts,
-        system_tokens + tools + context_tokens + summary_tokens + goal_cost + plan_cost + conversation_tokens,
+        system_tokens + tools + context_tokens + summary_tokens + ask_cost + plan_cost + conversation_tokens,
     )
 
 
@@ -181,8 +197,9 @@ def _prepare_prior(
     task,
     digest: str,
     turn_context: TurnContext | None,
-    goal: str = "",
-    plan: bool = False,
+    ask_mode: bool = False,
+    plan_status: str = "off",
+    plan_body: str = "",
 ):
     if not task.conversation_id:
         return [], "", task.raw_request
@@ -207,8 +224,8 @@ def _prepare_prior(
         exact_count=turn_context.exact_count,
         extra_tokens=(
             turn_context.extra_tokens
-            + goal_tokens(goal, turn_context.count_tokens)
-            + plan_tokens(plan, turn_context.count_tokens)
+            + ask_tokens(ask_mode, turn_context.count_tokens)
+            + plan_tokens(plan_status, plan_body, turn_context.count_tokens)
         ),
     )
     if prepared.compacted:
@@ -223,6 +240,13 @@ def _save_usage(repo: Repository, conversation_id: str | None, result: dict) -> 
     completion = result.get("completion_tokens") or 0
     if prompt:
         repo.save_context_usage(conversation_id, prompt + completion)
+
+
+def _ask_and_plan(repo: Repository, conversation_id: str | None) -> tuple[bool, str, str]:
+    if not conversation_id:
+        return False, "off", ""
+    status, body = repo.get_plan_state(conversation_id)
+    return repo.get_ask_mode(conversation_id), status, body
 
 
 def _pairs(turns: list[TurnRecord]) -> list[tuple[str, str]]:
@@ -291,3 +315,4 @@ def _fail(repo: Repository, store: FileStore, task_id: str, code: str, step_coun
         error_message=body["message"],
         step_count=step_count,
     )
+    hub.fail(task_id, body)

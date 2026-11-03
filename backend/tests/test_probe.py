@@ -119,5 +119,5 @@ def _register(client):
     assert response.status_code == 201
 
 
-def _ok(messages, tools):
+def _ok(messages, tools, sink=None):
     return AssistantMessage(content="好", tool_calls=[])

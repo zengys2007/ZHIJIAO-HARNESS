@@ -12,8 +12,8 @@ def assemble_model_input(
     turn_messages: list[dict],
     context_digest: str = "",
     context_summary: str = "",
-    context_goal: str = "",
-    context_plan: bool = False,
+    context_ask: str = "",
+    context_plan: str = "",
 ) -> list[dict]:
     prefix = [{"role": "system", "content": system}]
     if context_digest:
@@ -24,7 +24,7 @@ def assemble_model_input(
         prior_turns,
         current_user,
         turn_messages,
-        goal=context_goal,
+        ask=context_ask,
         plan=context_plan,
     )
 
@@ -36,20 +36,16 @@ def context_messages(
     current_user: str | None,
     extra: list[dict] | None = None,
     *,
-    goal: str = "",
-    plan: bool = False,
+    ask: str = "",
+    plan: str = "",
 ) -> list[dict]:
-    from app.context.goal import goal_message
-    from app.context.plan import plan_message
-
     messages = list(prefix)
     if summary:
         messages.append({"role": "user", "content": escape_teacher_text(summary)})
-    if goal:
-        messages.append({"role": "user", "content": goal_message(goal)})
-    plan_text = plan_message(plan)
-    if plan_text:
-        messages.append({"role": "user", "content": plan_text})
+    if ask:
+        messages.append({"role": "user", "content": ask})
+    if plan:
+        messages.append({"role": "system", "content": plan})
     for user_text, assistant_text in prior_turns:
         messages.append({"role": "user", "content": escape_teacher_text(user_text)})
         messages.append({"role": "assistant", "content": assistant_text})

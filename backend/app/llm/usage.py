@@ -5,18 +5,23 @@ import urllib.error
 import urllib.request
 
 WINDOW_FIELDS = ("max_model_len", "context_length", "context_window")
+OUTPUT_FIELDS = ("max_completion_tokens", "max_output_tokens", "output_token_limit")
 DEFAULT_LIMIT = 1_000_000
+DEFAULT_OUTPUT_LIMIT = 128_000
 
 
 def parse_context_limit(payload: object, model: str) -> int | None:
     chosen = _matching_model(payload, model)
     if chosen is None:
         return None
-    for key in WINDOW_FIELDS:
-        value = chosen.get(key)
-        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
-            return value
-    return None
+    return _positive_field(chosen, WINDOW_FIELDS)
+
+
+def parse_output_limit(payload: object, model: str) -> int | None:
+    chosen = _matching_model(payload, model)
+    if chosen is None:
+        return None
+    return _positive_field(chosen, OUTPUT_FIELDS)
 
 
 def parse_input_tokens(payload: object) -> int | None:
@@ -39,12 +44,23 @@ def parse_usage(payload: object) -> tuple[int | None, int | None]:
     )
 
 
-def fetch_context_limit(settings, opener=None) -> int | None:
+def fetch_model_payload(settings, opener=None):
     url = settings.llm_base_url.rstrip("/") + "/models"
-    data = _request_json(url, settings.llm_api_key, None, settings.llm_timeout_seconds, opener)
+    return _request_json(url, settings.llm_api_key, None, settings.llm_timeout_seconds, opener)
+
+
+def fetch_context_limit(settings, opener=None) -> int | None:
+    data = fetch_model_payload(settings, opener)
     if data is None:
         return None
     return parse_context_limit(data, settings.llm_model)
+
+
+def fetch_output_limit(settings, opener=None) -> int | None:
+    data = fetch_model_payload(settings, opener)
+    if data is None:
+        return None
+    return parse_output_limit(data, settings.llm_model)
 
 
 def fetch_input_tokens(settings, messages: list[dict], opener=None) -> int | None:
@@ -68,6 +84,14 @@ def count_messages_locally(messages: list[dict]) -> int:
         if tool_calls:
             total += len(encoding.encode(json.dumps(tool_calls, ensure_ascii=False)))
     return total
+
+
+def _positive_field(record: dict, keys: tuple[str, ...]) -> int | None:
+    for key in keys:
+        value = record.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+    return None
 
 
 def _matching_model(payload: object, model: str) -> dict | None:

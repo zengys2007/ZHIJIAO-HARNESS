@@ -15,22 +15,41 @@ def parse_create_conversation(body: object) -> None:
     raise RequestError("invalid conversation body")
 
 
-def parse_goal(body: object) -> str:
-    if not isinstance(body, dict) or set(body) != {"goal"}:
-        raise RequestError("invalid goal")
-    goal = body["goal"]
-    if not isinstance(goal, str):
-        raise RequestError("invalid goal")
-    return goal.strip()
+def parse_pin(body: object) -> bool:
+    if not isinstance(body, dict) or set(body) != {"pinned"}:
+        raise RequestError("invalid pin")
+    pinned = body["pinned"]
+    if not isinstance(pinned, bool):
+        raise RequestError("invalid pin")
+    return pinned
 
 
-def parse_plan_mode(body: object) -> bool:
-    if not isinstance(body, dict) or set(body) != {"plan_mode"}:
+def parse_ask(body: object) -> bool:
+    if not isinstance(body, dict) or set(body) != {"ask_mode"}:
+        raise RequestError("invalid ask")
+    enabled = body["ask_mode"]
+    if not isinstance(enabled, bool):
+        raise RequestError("invalid ask")
+    return enabled
+
+
+def parse_plan(body: object) -> dict:
+    if not isinstance(body, dict):
         raise RequestError("invalid plan")
-    value = body["plan_mode"]
-    if not isinstance(value, bool):
-        raise RequestError("invalid plan")
-    return value
+    keys = set(body)
+    if keys == {"plan_mode"}:
+        value = body["plan_mode"]
+        if not isinstance(value, bool):
+            raise RequestError("invalid plan")
+        return {"kind": "mode", "enabled": value}
+    if keys == {"plan_body"}:
+        value = body["plan_body"]
+        if not isinstance(value, str):
+            raise RequestError("invalid plan")
+        return {"kind": "body", "body": value.strip()}
+    if keys == {"action"} and body["action"] == "generate":
+        return {"kind": "generate"}
+    raise RequestError("invalid plan")
 
 
 def parse_message(body: object) -> tuple[str, str | None]:

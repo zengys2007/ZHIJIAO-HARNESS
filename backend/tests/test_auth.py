@@ -133,16 +133,18 @@ def test_teachers_cannot_read_each_others_conversations_or_tasks(tmp_path):
         json={"content": "我也看看"},
     ).status_code == 404
     assert teacher_b.get(f"/api/tasks/{task_id}").status_code == 404
+    assert _wait(teacher_a, task_id)["status"] == "succeeded"
     listed = teacher_a.get("/api/conversations").json()["conversations"]
     assert listed[0]["title"] == "这节课怎么讲通分"
     assert conversation_id not in {
         item["conversation_id"] for item in teacher_b.get("/api/conversations").json()["conversations"]
     }
     long = teacher_a.post("/api/conversations")
-    teacher_a.post(
+    long_sent = teacher_a.post(
         f"/api/conversations/{long.json()['conversation_id']}/messages",
         json={"content": "一二三四五六七八九十一二三四五六七八九"},
     )
+    assert _wait(teacher_a, long_sent.json()["task_id"])["status"] == "succeeded"
     titles = [item["title"] for item in teacher_a.get("/api/conversations").json()["conversations"]]
     assert "一二三四五六七八九十一二三四五六七八…" in titles
 
@@ -253,11 +255,22 @@ def test_expired_remember_token_is_rejected_and_removed(tmp_path):
     assert repo.user_id_for_remember_token(digest, remember_now()) is None
 
 
+def _wait(client: TestClient, task_id: str):
+    import threading
+
+    for _ in range(50):
+        body = client.get(f"/api/tasks/{task_id}").json()
+        if body["status"] in {"succeeded", "failed"}:
+            return body
+        threading.Event().wait(0.02)
+    raise AssertionError("timed out")
+
+
 def _client(tmp_path):
     return TestClient(create_app(Settings(data_dir=tmp_path, auth_secret=SECRET), complete=_ok))
 
 
-def _ok(messages, tools):
+def _ok(messages, tools, sink=None):
     return AssistantMessage(content="好", tool_calls=[])
 
 

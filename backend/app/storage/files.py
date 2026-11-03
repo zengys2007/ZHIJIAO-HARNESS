@@ -66,6 +66,12 @@ class FileStore:
         if directory.exists():
             shutil.rmtree(directory)
 
+    def remove_artifact(self, artifact_id: str) -> None:
+        self._check_id(artifact_id)
+        directory = self.root / "artifacts" / artifact_id
+        if directory.exists():
+            shutil.rmtree(directory)
+
     def _check_id(self, value: str) -> None:
         if not isinstance(value, str) or not value or any(char not in _ID_CHARS for char in value):
             raise ValueError("unsafe id")
