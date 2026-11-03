@@ -33,6 +33,7 @@ from app.storage.protocol import (
     VersionRecord,
 )
 from app.tasks.states import transition as change_status
+from app.teaching.cycles import find_cycle
 
 EVENT_TYPES = {"user_message", "assistant_message", "tool_result", "artifact_published"}
 MAX_REQUEST_CHARS = 4000
@@ -811,6 +812,69 @@ class SqliteRepository:
                         "UPDATE knowledge_points SET prerequisites = ? WHERE id = ?",
                         (json.dumps(updated, ensure_ascii=False), point_row["id"]),
                     )
+
+    def batch_create_knowledge_points(
+        self, owner_id: str, entries: list[tuple[int, str, str, list[str]]]
+    ) -> tuple[int, list[dict], list[str]]:
+        """批量建点。entries 是 (行号, 名称, 说明, 先修)。
+
+        返回 (created, skipped, ensured_prereqs)。整批单事务；成环抛 ValueError（含成环链）并整批回滚。
+        """
+        created = 0
+        skipped: list[dict] = []
+        ensured: list[str] = []
+        with self.transaction():
+            now = _now()
+            existing = {
+                row["name"]
+                for row in self._conn.execute(
+                    "SELECT name FROM knowledge_points WHERE owner_id = ?", (owner_id,)
+                )
+            }
+            pending = {name for _, name, _, _ in entries}
+            for line, name, description, prerequisites in entries:
+                if name in existing:
+                    skipped.append({"line": line, "name": name, "reason": "重名"})
+                    continue
+                self._conn.execute(
+                    """
+                    INSERT INTO knowledge_points (id, owner_id, name, description, prerequisites, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        uuid4().hex,
+                        owner_id,
+                        name,
+                        description,
+                        json.dumps(list(prerequisites), ensure_ascii=False),
+                        now,
+                    ),
+                )
+                existing.add(name)
+                created += 1
+                for prereq_name in prerequisites:
+                    # 本批条目会正式创建的先修名不提前补建，否则同名正式条目会被误判重名而丢先修
+                    if prereq_name not in existing and prereq_name not in pending:
+                        self._ensure_knowledge_point(owner_id, prereq_name, now)
+                        existing.add(prereq_name)
+                        ensured.append(prereq_name)
+            points = [
+                KnowledgePoint(
+                    id=row["id"],
+                    owner_id=row["owner_id"],
+                    name=row["name"],
+                    description=row["description"],
+                    prerequisites=json.loads(row["prerequisites"]),
+                )
+                for row in self._conn.execute(
+                    "SELECT * FROM knowledge_points WHERE owner_id = ? ORDER BY created_at, id",
+                    (owner_id,),
+                )
+            ]
+            cycle = find_cycle(points)
+            if cycle is not None:
+                raise ValueError("先修关系成环：" + " → ".join(cycle))
+        return created, skipped, ensured
 
     def create_assignment(self, owner_id: str, assignment: AssignmentInput) -> str:
         assignment_id = uuid4().hex

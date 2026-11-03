@@ -151,3 +151,40 @@ def test_delete_point_rejects_unknown(tmp_path):
 
     with pytest.raises(NotFoundError):
         repo.delete_knowledge_point(user_id, "0" * 32)
+
+
+def test_batch_import_creates_and_skips_duplicates(tmp_path):
+    repo, user_id, _class_id = _repo(tmp_path)  # 已有 约分、通分
+
+    created, skipped, ensured = repo.batch_create_knowledge_points(
+        user_id,
+        [
+            (1, "分数乘除", "乘除混合", ["约分"]),
+            (2, "约分", "重复", []),
+            (3, "分数比较", "", ["分数乘除", "不存在的先修"]),
+        ],
+    )
+
+    assert created == 2
+    assert skipped == [{"line": 2, "name": "约分", "reason": "重名"}]
+    assert ensured == ["不存在的先修"]
+    names = {item.name: item for item in repo.load_teaching(user_id).knowledge_points}
+    assert names["分数比较"].prerequisites == ["分数乘除", "不存在的先修"]
+    assert names["不存在的先修"].description == ""
+
+
+def test_batch_import_rolls_back_on_cycle(tmp_path):
+    repo, user_id, _class_id = _repo(tmp_path)
+
+    with pytest.raises(ValueError) as exc_info:
+        repo.batch_create_knowledge_points(
+            user_id,
+            [
+                (1, "甲", "", ["乙"]),
+                (2, "乙", "", ["甲"]),
+            ],
+        )
+
+    assert "甲" in str(exc_info.value)
+    names = {item.name for item in repo.load_teaching(user_id).knowledge_points}
+    assert "甲" not in names and "乙" not in names
