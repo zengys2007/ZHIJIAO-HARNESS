@@ -922,6 +922,12 @@ textarea::placeholder { color: var(--placeholder); }
   margin: 0;
 }
 
+.provider-model-arrow {
+  flex: none;
+  color: var(--faint);
+  font-size: 12px;
+}
+
 .provider-model-remove {
   flex: none;
   width: 36px;
@@ -977,9 +983,16 @@ textarea::placeholder { color: var(--placeholder); }
 }
 
 .provider-btn.primary {
-  border: 1px solid var(--accent);
-  background: var(--accent);
-  color: #fff;
+  border: 1px solid var(--ink);
+  background: var(--ink);
+  color: var(--white);
+}
+
+.provider-btn.primary:disabled,
+.provider-add-model:disabled,
+.provider-model-remove:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .provider-add {

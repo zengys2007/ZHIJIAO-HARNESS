@@ -5,8 +5,10 @@ import {
   customProviderReady,
   loadCustomProviders,
   newProviderId,
+  primaryModelName,
   saveCustomProviders,
   type CustomProvider,
+  type ProviderModel,
 } from "../lib/providers";
 import type { AuthUser } from "../types/api";
 
@@ -190,8 +192,8 @@ type ExpandedId = "local" | string;
 type EditorDraft = {
   name: string;
   baseUrl: string;
-  model: string;
   apiKey: string;
+  models: ProviderModel[];
 };
 
 function ApiConfig({
@@ -208,7 +210,7 @@ function ApiConfig({
   const [customs, setCustoms] = useState<CustomProvider[]>(() => loadCustomProviders());
   const [draft, setDraft] = useState<EditorDraft | null>(null);
   const [draftSnapshot, setDraftSnapshot] = useState<EditorDraft | null>(null);
-  const [customOpen, setCustomOpen] = useState(true);
+  const [customOpen, setCustomOpen] = useState(false);
   const [localProbe, setLocalProbe] = useState<ProbeState>("checking");
   const [adding, setAdding] = useState(false);
   const [addName, setAddName] = useState("");
@@ -271,7 +273,7 @@ function ApiConfig({
     }
     setDraft(null);
     setDraftSnapshot(null);
-    setCustomOpen(true);
+    setCustomOpen(false);
     setExpanded("local");
   }
 
@@ -281,15 +283,24 @@ function ApiConfig({
       setDraft(null);
       return;
     }
+    const models =
+      provider.models.length > 0
+        ? provider.models.map((item) => ({ ...item }))
+        : provider.model
+          ? [{ alias: provider.model, label: provider.model }]
+          : [];
     const next: EditorDraft = {
       name: provider.name,
       baseUrl: provider.base_url,
-      model: provider.model,
       apiKey: provider.api_key,
+      models,
     };
     setDraft(next);
-    setDraftSnapshot(next);
-    setCustomOpen(true);
+    setDraftSnapshot({
+      ...next,
+      models: models.map((item) => ({ ...item })),
+    });
+    setCustomOpen(false);
     setExpanded(provider.id);
   }
 
@@ -312,14 +323,18 @@ function ApiConfig({
       setToast(t("providerNameMissing"));
       return;
     }
+    const models = draft.models
+      .map((item) => ({ alias: item.alias.trim(), label: item.label.trim() }))
+      .filter((item) => item.alias || item.label);
     const next = customs.map((item) =>
       item.id === expanded
         ? {
             ...item,
             name: draft.name.trim(),
             base_url: draft.baseUrl.trim(),
-            model: draft.model.trim(),
+            model: primaryModelName(models),
             api_key: draft.apiKey,
+            models,
           }
         : item,
     );
@@ -340,12 +355,15 @@ function ApiConfig({
     event.preventDefault();
     const name = addName.trim();
     if (!name) return;
+    const modelName = addModel.trim();
+    const models = modelName ? [{ alias: modelName, label: modelName }] : [];
     const created: CustomProvider = {
       id: newProviderId(),
       name,
       base_url: addUrl.trim(),
-      model: addModel.trim(),
+      model: modelName,
       api_key: addKey,
+      models,
     };
     persistCustoms([...customs, created]);
     setAdding(false);
@@ -359,17 +377,36 @@ function ApiConfig({
     return customProviderReady(provider) ? "idle" : "unset";
   }
 
+  function updateModelRow(index: number, patch: Partial<ProviderModel>) {
+    setDraft((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        models: current.models.map((item, i) => (i === index ? { ...item, ...patch } : item)),
+      };
+    });
+  }
+
   function renderEditor(kind: "local" | "custom") {
     const editable = kind === "custom";
     const title = kind === "local" ? t("localEnv") : draft?.name || t("customEnv");
     const sourceTag = kind === "local" ? "local" : "custom";
     const shownUrl = kind === "local" ? environment?.base_url ?? "" : draft?.baseUrl ?? "";
-    const shownModel = kind === "local" ? environment?.model ?? "" : draft?.model ?? "";
     const shownKey = kind === "local" ? "" : draft?.apiKey ?? "";
     const hasStoredKey = kind === "local" ? Boolean(environment?.has_api_key) : Boolean(draft?.apiKey.trim());
     const keyPlaceholder =
-      kind === "local" ? (hasStoredKey ? t("keyFromEnv") : t("keyMissing")) : t("keyEnter");
+      kind === "local"
+        ? hasStoredKey
+          ? t("keyFromEnv")
+          : t("keyLeaveBlank")
+        : t("keyLeaveBlank");
     const showKeyWarn = kind === "local" ? !hasStoredKey : !hasStoredKey;
+    const modelRows: ProviderModel[] =
+      kind === "local"
+        ? environment?.model
+          ? [{ alias: environment.model, label: environment.model }]
+          : []
+        : draft?.models ?? [];
     return (
       <form className="provider-editor" onSubmit={(event) => event.preventDefault()}>
         <div className="provider-editor-panel">
@@ -379,7 +416,9 @@ function ApiConfig({
                 <span className="sr-only">{t("providerName")}</span>
                 <input
                   value={draft?.name ?? ""}
-                  onChange={(event) => setDraft((current) => (current ? { ...current, name: event.target.value } : current))}
+                  onChange={(event) =>
+                    setDraft((current) => (current ? { ...current, name: event.target.value } : current))
+                  }
                   autoComplete="off"
                 />
               </label>
@@ -423,7 +462,7 @@ function ApiConfig({
                     name="base-url"
                     type="url"
                     value={shownUrl}
-                    placeholder={editable ? "http://127.0.0.1:9" : t("urlMissing")}
+                    placeholder={editable ? "https://api.example.com/v1" : t("urlMissing")}
                     disabled={!editable}
                     autoComplete="off"
                     onChange={(event) =>
@@ -441,30 +480,60 @@ function ApiConfig({
               <span className="provider-field-label">{t("modelCatalog")}</span>
               <span className="provider-field-hint">{t("modelCatalogHint")}</span>
             </div>
-            <div className="provider-model-row">
-              <label className="provider-model-input">
-                <span className="sr-only">{t("modelName")}</span>
-                <input
-                  name="model"
-                  value={shownModel}
-                  placeholder={editable ? t("modelMissing") : t("urlMissing")}
+            {modelRows.map((row, index) => (
+              <div key={`model-${index}`} className="provider-model-row">
+                <label className="provider-model-input">
+                  <span className="sr-only">{t("modelAlias")}</span>
+                  <input
+                    value={row.alias}
+                    placeholder={t("modelAlias")}
+                    disabled={!editable}
+                    autoComplete="off"
+                    onChange={(event) => updateModelRow(index, { alias: event.target.value })}
+                  />
+                </label>
+                <span className="provider-model-arrow" aria-hidden>
+                  →
+                </span>
+                <label className="provider-model-input">
+                  <span className="sr-only">{t("modelLabel")}</span>
+                  <input
+                    value={row.label}
+                    placeholder={t("modelLabel")}
+                    disabled={!editable}
+                    autoComplete="off"
+                    onChange={(event) => updateModelRow(index, { label: event.target.value })}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="provider-model-remove"
+                  aria-label={t("removeModel")}
                   disabled={!editable}
-                  autoComplete="off"
-                  onChange={(event) =>
-                    setDraft((current) => (current ? { ...current, model: event.target.value } : current))
-                  }
-                />
-              </label>
-              <button
-                type="button"
-                className="provider-model-remove"
-                aria-label={t("removeModel")}
-                onClick={() => setToast(t("unavailable"))}
-              >
-                ⌫
-              </button>
-            </div>
-            <button type="button" className="provider-add-model" onClick={() => setToast(t("unavailable"))}>
+                  onClick={() => {
+                    if (!editable) return;
+                    setDraft((current) =>
+                      current
+                        ? { ...current, models: current.models.filter((_, i) => i !== index) }
+                        : current,
+                    );
+                  }}
+                >
+                  ⌫
+                </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              className="provider-add-model"
+              disabled={!editable}
+              onClick={() => {
+                if (!editable) return;
+                setDraft((current) =>
+                  current ? { ...current, models: [...current.models, { alias: "", label: "" }] } : current,
+                );
+              }}
+            >
               <span aria-hidden="true">+</span>
               {t("addModel")}
             </button>

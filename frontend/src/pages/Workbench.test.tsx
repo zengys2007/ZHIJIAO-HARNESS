@@ -151,6 +151,8 @@ describe("工作台", () => {
     expect(screen.getByRole("button", { name: "添加模型提供商" })).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "编辑本机环境" }));
+    expect(screen.getByRole("button", { name: "自定义设置" }).getAttribute("aria-expanded")).toBe("false");
+    await user.click(screen.getByRole("button", { name: "自定义设置" }));
     expect(screen.getByRole("textbox", { name: "API 地址" })).toHaveProperty("disabled", true);
     expect(calls.some((c) => c.source === "local")).toBe(true);
     await user.click(screen.getByRole("button", { name: "取消" }));
@@ -166,11 +168,26 @@ describe("工作台", () => {
     expect(screen.getByRole("button", { name: "删除amazon-bedrock" })).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "编辑amazon-bedrock" }));
+    expect(screen.getByRole("button", { name: "自定义设置" }).getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("textbox", { name: "API 地址" })).toBeNull();
     const nameInput = screen.getByRole("textbox", { name: "名称" });
     await user.clear(nameInput);
     await user.type(nameInput, "bedrock-renamed");
+    await user.click(screen.getByRole("button", { name: "添加模型" }));
+    const aliases = screen.getAllByRole("textbox", { name: "模型别名" });
+    const labels = screen.getAllByRole("textbox", { name: "显示名称" });
+    expect(aliases.length).toBeGreaterThan(1);
+    await user.clear(aliases[1]);
+    await user.type(aliases[1], "flash");
+    await user.clear(labels[1]);
+    await user.type(labels[1], "Flash");
     await user.click(screen.getByRole("button", { name: "保存" }));
     expect(screen.getByText("bedrock-renamed")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "编辑bedrock-renamed" }));
+    expect(screen.getByDisplayValue("flash")).toBeTruthy();
+    expect(screen.getByDisplayValue("Flash")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "取消" }));
 
     await user.click(screen.getByRole("button", { name: "删除bedrock-renamed" }));
     expect(screen.queryByText("bedrock-renamed")).toBeNull();
