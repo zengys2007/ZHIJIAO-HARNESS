@@ -194,6 +194,10 @@ function ApiConfig({
   const [baseUrl, setBaseUrl] = useState("");
   const [model, setModel] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [draftSnapshot, setDraftSnapshot] = useState<{ baseUrl: string; model: string; apiKey: string } | null>(
+    null,
+  );
+  const [customOpen, setCustomOpen] = useState(true);
   const [probeBySource, setProbeBySource] = useState<Record<ProviderId, ProbeState>>({
     local: "checking",
     dotenv: "checking",
@@ -286,49 +290,56 @@ function ApiConfig({
   ];
 
   function toggle(id: ProviderId) {
-    setExpanded((current) => (current === id ? null : id));
+    if (expanded === id) {
+      setExpanded(null);
+      return;
+    }
+    if (id === "dotenv") {
+      setDraftSnapshot({ baseUrl, model, apiKey });
+    }
+    setCustomOpen(true);
+    setExpanded(id);
+  }
+
+  function cancelEdit() {
+    if (expanded === "dotenv" && draftSnapshot) {
+      setBaseUrl(draftSnapshot.baseUrl);
+      setModel(draftSnapshot.model);
+      setApiKey(draftSnapshot.apiKey);
+    }
+    setExpanded(null);
+  }
+
+  function saveEdit() {
+    setToast(t("unavailable"));
+    setExpanded(null);
   }
 
   function renderEditor(id: ProviderId) {
     const dotenv = id === "dotenv";
     const shownUrl = dotenv ? baseUrl : environment?.base_url ?? "";
     const shownModel = dotenv ? model : environment?.model ?? "";
+    const hasStoredKey = dotenv ? Boolean(sources?.dotenv.has_api_key) : Boolean(environment?.has_api_key);
     const keyPlaceholder = dotenv
-      ? sources?.dotenv.has_api_key
+      ? hasStoredKey
         ? t("keyKeep")
         : t("keyEnter")
-      : environment?.has_api_key
+      : hasStoredKey
         ? t("keyFromEnv")
         : t("keyMissing");
-    const probeState = probeBySource[id];
+    const showKeyWarn = dotenv ? !hasStoredKey && !apiKey.trim() : !hasStoredKey;
+    const sourceTag = dotenv ? "dotenv" : "local";
+    const title = dotenv ? t("customEnv") : t("localEnv");
     return (
-      <form className="api-form provider-editor" onSubmit={(event) => event.preventDefault()}>
-        <div className="api-card">
-          <label className="api-row">
-            <span>{t("serviceUrl")}</span>
-            <input
-              name="base-url"
-              type="url"
-              value={shownUrl}
-              placeholder={dotenv ? "http://127.0.0.1:9" : t("urlMissing")}
-              disabled={!dotenv}
-              autoComplete="off"
-              onChange={(event) => setBaseUrl(event.target.value)}
-            />
-          </label>
-          <label className="api-row">
-            <span>{t("modelName")}</span>
-            <input
-              name="model"
-              value={shownModel}
-              placeholder={dotenv ? t("modelMissing") : t("urlMissing")}
-              disabled={!dotenv}
-              autoComplete="off"
-              onChange={(event) => setModel(event.target.value)}
-            />
-          </label>
-          <label className="api-row">
-            <span>{t("secret")}</span>
+      <form className="provider-editor" onSubmit={(event) => event.preventDefault()}>
+        <div className="provider-editor-panel">
+          <p className="provider-editor-title">
+            <span className="provider-editor-title-name">{title}</span>
+            <span className="provider-editor-title-id">{sourceTag}</span>
+          </p>
+
+          <label className="provider-field">
+            <span className="provider-field-label">{t("apiKeyLabel")}</span>
             <input
               name="api-key"
               type="password"
@@ -339,14 +350,76 @@ function ApiConfig({
               onChange={(event) => setApiKey(event.target.value)}
             />
           </label>
-          <div className="api-row probe-row">
-            <span>{t("connected")}</span>
-            <div className="probe-status">
-              <span className="lamp" data-state={probeState} aria-hidden="true" />
-              <p className="probe-label" role="status">
-                {probeCopy(probeState, t)}
-              </p>
+          {showKeyWarn ? <p className="provider-key-warn">{t("keyWarnMissing")}</p> : null}
+
+          <div className="provider-accordion">
+            <button
+              type="button"
+              className="provider-accordion-trigger"
+              aria-expanded={customOpen}
+              onClick={() => setCustomOpen((open) => !open)}
+            >
+              <span aria-hidden="true">{customOpen ? "▾" : "▸"}</span>
+              {t("customSettings")}
+            </button>
+            {customOpen ? (
+              <div className="provider-accordion-body">
+                <label className="provider-field">
+                  <span className="provider-field-label">{t("apiAddress")}</span>
+                  <input
+                    name="base-url"
+                    type="url"
+                    value={shownUrl}
+                    placeholder={dotenv ? "http://127.0.0.1:9" : t("urlMissing")}
+                    disabled={!dotenv}
+                    autoComplete="off"
+                    onChange={(event) => setBaseUrl(event.target.value)}
+                  />
+                </label>
+                <p className="provider-field-hint">{t("apiAddressHint")}</p>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="provider-catalog">
+            <div className="provider-catalog-head">
+              <span className="provider-field-label">{t("modelCatalog")}</span>
+              <span className="provider-field-hint">{t("modelCatalogHint")}</span>
             </div>
+            <div className="provider-model-row">
+              <label className="provider-model-input">
+                <span className="sr-only">{t("modelName")}</span>
+                <input
+                  name="model"
+                  value={shownModel}
+                  placeholder={dotenv ? t("modelMissing") : t("urlMissing")}
+                  disabled={!dotenv}
+                  autoComplete="off"
+                  onChange={(event) => setModel(event.target.value)}
+                />
+              </label>
+              <button
+                type="button"
+                className="provider-model-remove"
+                aria-label={t("removeModel")}
+                onClick={() => setToast(t("unavailable"))}
+              >
+                ⌫
+              </button>
+            </div>
+            <button type="button" className="provider-add-model" onClick={() => setToast(t("unavailable"))}>
+              <span aria-hidden="true">+</span>
+              {t("addModel")}
+            </button>
+          </div>
+
+          <div className="provider-editor-actions">
+            <button type="button" className="provider-btn ghost" onClick={cancelEdit}>
+              {t("cancel")}
+            </button>
+            <button type="button" className="provider-btn primary" onClick={saveEdit}>
+              {t("save")}
+            </button>
           </div>
         </div>
       </form>
@@ -410,15 +483,6 @@ type ProbeState = "idle" | "checking" | "up" | "down" | "offline" | "unset";
 
 function environmentReady(value: { base_url: string; model: string; has_api_key: boolean } | undefined): boolean {
   return Boolean(value && value.base_url && value.model && value.has_api_key);
-}
-
-function probeCopy(state: ProbeState, t: (key: "checking" | "reachable" | "unreachable" | "offlineService" | "unsetEnv" | "notChecked") => string): string {
-  if (state === "checking") return t("checking");
-  if (state === "up") return t("reachable");
-  if (state === "down") return t("unreachable");
-  if (state === "offline") return t("offlineService");
-  if (state === "unset") return t("unsetEnv");
-  return t("notChecked");
 }
 
 function listStatusCopy(

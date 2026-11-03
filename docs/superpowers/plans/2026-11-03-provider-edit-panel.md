@@ -24,6 +24,6 @@
 - Modify: `frontend/src/styles.css`
 - Modify: `frontend/src/pages/Workbench.test.tsx`
 
-- [ ] **Step 1:** 更新测试——编辑后见 API 密钥、自定义设置、模型目录、取消/保存；本机 disabled；添加模型尚未开放；取消还原自行填写草稿。
-- [ ] **Step 2:** 实现展开面板、文案、样式、草稿快照。
-- [ ] **Step 3:** vitest + tsc 通过并提交。
+- [x] **Step 1:** 更新测试——编辑后见 API 密钥、自定义设置、模型目录、取消/保存；本机 disabled；添加模型尚未开放；取消还原自行填写草稿。
+- [x] **Step 2:** 实现展开面板、文案、样式、草稿快照。
+- [x] **Step 3:** vitest + tsc 通过并提交。
