@@ -60,6 +60,7 @@ def test_error_body_uses_one_shape_and_known_retry_flags():
         ("interrupted", True),
         ("storage_failed", True),
         ("internal", True),
+        ("cycle", False),
     ],
 )
 def test_every_error_code_is_defined_once(code, retryable):

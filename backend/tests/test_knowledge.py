@@ -1,7 +1,11 @@
 """知识点库：环检测、编辑、删除、批量导入。"""
 
 import pytest
+from fastapi.testclient import TestClient
 
+from app.config import Settings
+from app.llm.protocol import AssistantMessage
+from app.main import create_app
 from app.storage.protocol import (
     AssignmentInput,
     ConflictError,
@@ -188,3 +192,164 @@ def test_batch_import_rolls_back_on_cycle(tmp_path):
     assert "甲" in str(exc_info.value)
     names = {item.name for item in repo.load_teaching(user_id).knowledge_points}
     assert "甲" not in names and "乙" not in names
+
+
+# ===== API：编辑 / 删除 / 批量导入 =====
+
+
+def _client_pair(tmp_path):
+    # create_app 要求 auth_secret 至少 16 个字符
+    app = create_app(Settings(data_dir=tmp_path, auth_secret="test-secret-value"), complete=_stub_complete)
+    alice = TestClient(app)
+    alice.post("/api/auth/register", json={"username": "alice", "password": "correct-horse", "display_name": "甲"})
+    # load_teaching 在属主没有班级时提前返回空数据，先建一个班让 overview 看得到知识点
+    created = alice.post("/api/teaching/classes", json={"name": "一年一班", "students": ["小明"]})
+    assert created.status_code == 201
+    return alice
+
+
+def _stub_complete(messages, tools):
+    return AssistantMessage(content="好", tool_calls=[])
+
+
+def _create_point(client, name="约分", prerequisites=None) -> str:
+    response = client.post(
+        "/api/teaching/points",
+        json={"name": name, "description": "", "prerequisites": prerequisites or []},
+    )
+    assert response.status_code == 201
+    return response.json()["point_id"]
+
+
+def test_api_update_point_rejects_cycle(tmp_path):
+    alice = _client_pair(tmp_path)
+    _create_point(alice, "约分", [])
+    tongfen = _create_point(alice, "通分", ["约分"])
+
+    # 把约分的先修改成通分 -> 约分->通分->约分 成环
+    points = {item["name"]: item for item in alice.get("/api/teaching/overview").json()["knowledge_points"]}
+    yuefen_id = points["约分"]["point_id"]
+
+    response = alice.put(
+        f"/api/teaching/points/{yuefen_id}",
+        json={"name": "约分", "description": "", "prerequisites": ["通分"]},
+    )
+
+    assert response.status_code == 400
+    assert "约分" in response.json()["error"]["message"]
+    # 原数据未被破坏
+    points_after = {item["name"]: item for item in alice.get("/api/teaching/overview").json()["knowledge_points"]}
+    assert points_after["约分"]["prerequisites"] == []
+    assert points_after["通分"]["prerequisites"] == ["约分"]
+    # 未用到的 tongfen 变量消除告警
+    assert tongfen
+
+
+def test_api_update_point_ok_and_not_found(tmp_path):
+    alice = _client_pair(tmp_path)
+    point_id = _create_point(alice, "约分", [])
+
+    ok = alice.put(
+        f"/api/teaching/points/{point_id}",
+        json={"name": "约分与化简", "description": "新说明", "prerequisites": []},
+    )
+    assert ok.status_code == 200
+    missing = alice.put(
+        "/api/teaching/points/" + "0" * 32,
+        json={"name": "新名", "description": "", "prerequisites": []},
+    )
+    assert missing.status_code == 404
+
+
+def test_api_delete_point(tmp_path):
+    alice = _client_pair(tmp_path)
+    point_id = _create_point(alice, "约分", [])
+    _create_point(alice, "通分", ["约分"])
+
+    ok = alice.delete(f"/api/teaching/points/{point_id}")
+    assert ok.status_code == 204
+    points = {item["name"]: item for item in alice.get("/api/teaching/overview").json()["knowledge_points"]}
+    assert "约分" not in points
+    assert points["通分"]["prerequisites"] == []
+
+    missing = alice.delete(f"/api/teaching/points/{point_id}")
+    assert missing.status_code == 404
+
+
+def test_api_delete_point_with_scores_conflicts(tmp_path):
+    alice = _client_pair(tmp_path)
+    class_response = alice.post(
+        "/api/teaching/classes", json={"name": "三年二班", "students": ["小明"]}
+    )
+    class_id = class_response.json()["class_id"]
+    alice.post(
+        "/api/teaching/assignments",
+        json={
+            "class_id": class_id,
+            "title": "测验",
+            "kind": "quiz",
+            "records": [{"student": "小明", "scores": {"约分": 60}}],
+        },
+    )
+    points = {item["name"]: item for item in alice.get("/api/teaching/overview").json()["knowledge_points"]}
+
+    response = alice.delete(f"/api/teaching/points/{points['约分']['point_id']}")
+
+    assert response.status_code == 409
+
+
+def test_api_batch_import(tmp_path):
+    alice = _client_pair(tmp_path)
+
+    response = alice.post(
+        "/api/teaching/points/batch",
+        json={"text": "分数加减 | 同分母加减 | \n约分 | 化简分数 | 分数加减\n\n通分｜｜约分,约分"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["created"] == 3
+    assert body["skipped"] == []
+    assert body["ensured_prereqs"] == []
+    points = {item["name"]: item for item in alice.get("/api/teaching/overview").json()["knowledge_points"]}
+    assert points["通分"]["prerequisites"] == ["约分"]
+
+
+def test_api_batch_import_skips_existing(tmp_path):
+    alice = _client_pair(tmp_path)
+    _create_point(alice, "约分", [])
+
+    response = alice.post(
+        "/api/teaching/points/batch",
+        json={"text": "约分 | 重复 | \n通分 | | 约分"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["created"] == 1
+    assert body["skipped"] == [{"line": 1, "name": "约分", "reason": "重名"}]
+    assert body["ensured_prereqs"] == []
+
+
+def test_api_batch_import_rejects_oversize(tmp_path):
+    alice = _client_pair(tmp_path)
+
+    response = alice.post(
+        "/api/teaching/points/batch",
+        json={"text": "甲 | | \n" * 20000},
+    )
+
+    assert response.status_code == 400
+
+
+def test_api_batch_import_rolls_back_cycle(tmp_path):
+    alice = _client_pair(tmp_path)
+
+    response = alice.post(
+        "/api/teaching/points/batch",
+        json={"text": "甲 | | 乙\n乙 | | 甲"},
+    )
+
+    assert response.status_code == 400
+    overview = alice.get("/api/teaching/overview").json()
+    assert overview["knowledge_points"] == []

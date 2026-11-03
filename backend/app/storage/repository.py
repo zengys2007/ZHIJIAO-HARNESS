@@ -747,6 +747,10 @@ class SqliteRepository:
             raise ConflictError("knowledge point name taken") from exc
         return point_id
 
+    def ensure_knowledge_point(self, owner_id: str, name: str) -> str:
+        """不存在则补建（描述为空、无先修），返回 point_id。须在 transaction 内调用。"""
+        return self._ensure_knowledge_point(owner_id, name, _now())
+
     def update_knowledge_point(
         self, owner_id: str, point_id: str, name: str, description: str, prerequisites: list[str]
     ) -> None:

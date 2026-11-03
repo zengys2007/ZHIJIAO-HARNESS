@@ -33,10 +33,12 @@ from app.api.goals import (
 from app.api.messages import RequestError, parse_create_conversation, parse_message
 from app.api.probe import parse_probe
 from app.api.teaching import (
+    parse_batch_points,
     parse_create_assignment,
     parse_create_class,
     parse_create_document,
     parse_create_point,
+    parse_update_point,
 )
 from app.api.views import conversation_payload, task_payload
 from app.auth.passwords import burn_password_check, hash_password, verify_password
@@ -58,8 +60,9 @@ from app.llm.probe import probe_chat
 from app.preview.serve import load_preview
 from app.storage import open_repository
 from app.storage.files import FileStore
-from app.storage.protocol import ConflictError, InputError, NotFoundError, User
+from app.storage.protocol import ConflictError, InputError, KnowledgePoint, NotFoundError, User
 from app.tasks.runner import fail_stale_tasks, run_turn
+from app.teaching.cycles import find_cycle
 from app.teaching.digest import build_digest
 from app.teaching.insights import teaching_insights
 from app.tools.registry import assert_projection_budget, production_registry
@@ -572,6 +575,121 @@ def create_app(settings: Settings | None = None, complete=None, probe=None, env_
             return JSONResponse(error_payload("conflict", "这个知识点名称已经存在。"), status_code=409)
         return JSONResponse({"point_id": point_id}, status_code=201)
 
+    @app.put("/api/teaching/points/{point_id}")
+    async def update_teaching_point(point_id: str, request: Request):
+        user, denied = require_user(request)
+        if denied is not None:
+            return denied
+        try:
+            body = json.loads(await request.body() or b"null")
+            name, description, prerequisites = parse_update_point(body)
+        except json.JSONDecodeError:
+            return JSONResponse(error_payload("invalid_input"), status_code=400)
+        except RequestError as exc:
+            return JSONResponse(error_payload("invalid_input", exc.public_message), status_code=400)
+        try:
+            data = repository.load_teaching(user.id)
+            target = next((item for item in data.knowledge_points if item.id == point_id), None)
+            if target is None:
+                return JSONResponse(error_payload("not_found"), status_code=404)
+            old_name = target.name
+            renaming = old_name != name
+            # 假想保存后的全量点集：目标点的新值 + 其余点（改名时先修旧名同步替换）+ 内存中补建的缺失先修
+            saved_prerequisites = list(prerequisites)
+            imagined = [
+                KnowledgePoint(
+                    id=point_id,
+                    owner_id=user.id,
+                    name=name,
+                    description=description,
+                    prerequisites=saved_prerequisites,
+                )
+            ]
+            for item in data.knowledge_points:
+                if item.id == point_id:
+                    continue
+                prerequisites_now = item.prerequisites
+                if renaming and old_name in prerequisites_now:
+                    prerequisites_now = [name if entry == old_name else entry for entry in prerequisites_now]
+                imagined.append(
+                    KnowledgePoint(
+                        id=item.id,
+                        owner_id=item.owner_id,
+                        name=item.name,
+                        description=item.description,
+                        prerequisites=prerequisites_now,
+                    )
+                )
+            if renaming and old_name in saved_prerequisites:
+                saved_prerequisites = [name if entry == old_name else entry for entry in saved_prerequisites]
+                imagined[0] = KnowledgePoint(
+                    id=point_id,
+                    owner_id=user.id,
+                    name=name,
+                    description=description,
+                    prerequisites=saved_prerequisites,
+                )
+            imagined_names = {item.name for item in imagined}
+            for prereq_name in prerequisites:
+                if prereq_name not in imagined_names:
+                    imagined.append(
+                        KnowledgePoint(
+                            id=f"new:{prereq_name}",
+                            owner_id=user.id,
+                            name=prereq_name,
+                            description="",
+                            prerequisites=[],
+                        )
+                    )
+                    imagined_names.add(prereq_name)
+            cycle = find_cycle(imagined)
+            if cycle is not None:
+                return JSONResponse(
+                    error_payload("cycle", "先修关系成环：" + " → ".join(cycle)),
+                    status_code=400,
+                )
+            with repository.transaction():
+                for prereq_name in prerequisites:
+                    if prereq_name != name:
+                        repository.ensure_knowledge_point(user.id, prereq_name)
+                repository.update_knowledge_point(user.id, point_id, name, description, prerequisites)
+        except NotFoundError:
+            return JSONResponse(error_payload("not_found"), status_code=404)
+        except ConflictError:
+            return JSONResponse(error_payload("conflict", "这个知识点名称已经存在。"), status_code=409)
+        return {}
+
+    @app.delete("/api/teaching/points/{point_id}")
+    def delete_teaching_point(point_id: str, request: Request):
+        user, denied = require_user(request)
+        if denied is not None:
+            return denied
+        try:
+            repository.delete_knowledge_point(user.id, point_id)
+        except NotFoundError:
+            return JSONResponse(error_payload("not_found"), status_code=404)
+        except ConflictError:
+            return JSONResponse(error_payload("conflict", "该知识点已有成绩记录，不能删除。"), status_code=409)
+        return Response(status_code=204)
+
+    @app.post("/api/teaching/points/batch")
+    async def batch_import_points(request: Request):
+        user, denied = require_user(request)
+        if denied is not None:
+            return denied
+        try:
+            body = json.loads(await request.body() or b"null")
+            entries = parse_batch_points(body)
+        except json.JSONDecodeError:
+            return JSONResponse(error_payload("invalid_input"), status_code=400)
+        except RequestError as exc:
+            return JSONResponse(error_payload("invalid_input", exc.public_message), status_code=400)
+        try:
+            created, skipped, ensured = repository.batch_create_knowledge_points(user.id, entries)
+        except ValueError as exc:
+            return JSONResponse(error_payload("cycle", str(exc)), status_code=400)
+        return {"created": created, "skipped": skipped, "ensured_prereqs": ensured}
+
     @app.post("/api/teaching/assignments")
     async def create_teaching_assignment(request: Request):
         user, denied = require_user(request)
@@ -653,4 +771,5 @@ def _goal_rule_message(exc: InputError) -> str:
 
 
 if __name__ == "__main__":
-    main()
+    main()
+    main()
