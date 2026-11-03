@@ -245,6 +245,40 @@ def test_api_update_point_rejects_cycle(tmp_path):
     assert tongfen
 
 
+def test_api_update_point_rename_rejects_cycle(tmp_path):
+    alice = _client_pair(tmp_path)
+    _create_point(alice, "甲", [])
+    _create_point(alice, "乙", ["甲"])
+    points = {item["name"]: item for item in alice.get("/api/teaching/overview").json()["knowledge_points"]}
+    jia_id = points["甲"]["point_id"]
+
+    # 甲改名丙且先修乙：存储层会把乙先修里的甲同步替换为丙，形成 丙→乙→丙，
+    # 假想点集必须做同样的替换才能测出环（否则旧名引用悬空、find_cycle 丢边漏环）
+    rejected = alice.put(
+        f"/api/teaching/points/{jia_id}",
+        json={"name": "丙", "description": "", "prerequisites": ["乙"]},
+    )
+
+    assert rejected.status_code == 400
+    message = rejected.json()["error"]["message"]
+    assert "丙" in message and "乙" in message
+    # 被拒后原数据未被破坏
+    points_after = {item["name"]: item for item in alice.get("/api/teaching/overview").json()["knowledge_points"]}
+    assert points_after["甲"]["prerequisites"] == []
+    assert points_after["乙"]["prerequisites"] == ["甲"]
+
+    # 正向场景不误伤：合法改名（先修为空）应成功，乙的先修由存储层同步为丙
+    ok = alice.put(
+        f"/api/teaching/points/{jia_id}",
+        json={"name": "丙", "description": "", "prerequisites": []},
+    )
+
+    assert ok.status_code == 200
+    final = {item["name"]: item for item in alice.get("/api/teaching/overview").json()["knowledge_points"]}
+    assert "丙" in final and "甲" not in final
+    assert final["乙"]["prerequisites"] == ["丙"]
+
+
 def test_api_update_point_ok_and_not_found(tmp_path):
     alice = _client_pair(tmp_path)
     point_id = _create_point(alice, "约分", [])
@@ -254,6 +288,10 @@ def test_api_update_point_ok_and_not_found(tmp_path):
         json={"name": "约分与化简", "description": "新说明", "prerequisites": []},
     )
     assert ok.status_code == 200
+    # 回读 overview 验证改名与新说明已持久化
+    points = {item["name"]: item for item in alice.get("/api/teaching/overview").json()["knowledge_points"]}
+    assert points["约分与化简"]["point_id"] == point_id
+    assert points["约分与化简"]["description"] == "新说明"
     missing = alice.put(
         "/api/teaching/points/" + "0" * 32,
         json={"name": "新名", "description": "", "prerequisites": []},
@@ -296,6 +334,7 @@ def test_api_delete_point_with_scores_conflicts(tmp_path):
     response = alice.delete(f"/api/teaching/points/{points['约分']['point_id']}")
 
     assert response.status_code == 409
+    assert response.json()["error"]["message"] == "该知识点已有成绩记录，不能删除。"
 
 
 def test_api_batch_import(tmp_path):
