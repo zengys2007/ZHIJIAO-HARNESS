@@ -746,6 +746,72 @@ class SqliteRepository:
             raise ConflictError("knowledge point name taken") from exc
         return point_id
 
+    def update_knowledge_point(
+        self, owner_id: str, point_id: str, name: str, description: str, prerequisites: list[str]
+    ) -> None:
+        with self.transaction():
+            row = self._conn.execute(
+                "SELECT name FROM knowledge_points WHERE id = ? AND owner_id = ?",
+                (point_id, owner_id),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError("knowledge point not found")
+            old_name = row["name"]
+            clash = self._conn.execute(
+                "SELECT id FROM knowledge_points WHERE owner_id = ? AND name = ? AND id != ?",
+                (owner_id, name, point_id),
+            ).fetchone()
+            if clash is not None:
+                raise ConflictError("knowledge point name taken")
+            self._conn.execute(
+                "UPDATE knowledge_points SET name = ?, description = ?, prerequisites = ? WHERE id = ?",
+                (name, description, json.dumps(list(prerequisites), ensure_ascii=False), point_id),
+            )
+            if old_name != name:
+                # scores 只存 knowledge_point_id，名由 load_teaching 派生，无需更新
+                # 这里同步所有点先修列表里的旧名
+                points = self._conn.execute(
+                    "SELECT id, prerequisites FROM knowledge_points WHERE owner_id = ?",
+                    (owner_id,),
+                ).fetchall()
+                for point_row in points:
+                    names = json.loads(point_row["prerequisites"])
+                    if old_name in names:
+                        updated = [name if item == old_name else item for item in names]
+                        self._conn.execute(
+                            "UPDATE knowledge_points SET prerequisites = ? WHERE id = ?",
+                            (json.dumps(updated, ensure_ascii=False), point_row["id"]),
+                        )
+
+    def delete_knowledge_point(self, owner_id: str, point_id: str) -> None:
+        with self.transaction():
+            row = self._conn.execute(
+                "SELECT name FROM knowledge_points WHERE id = ? AND owner_id = ?",
+                (point_id, owner_id),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError("knowledge point not found")
+            used = self._conn.execute(
+                "SELECT 1 FROM scores WHERE knowledge_point_id = ? LIMIT 1",
+                (point_id,),
+            ).fetchone()
+            if used is not None:
+                raise ConflictError("knowledge point has scores")
+            name = row["name"]
+            self._conn.execute("DELETE FROM knowledge_points WHERE id = ?", (point_id,))
+            points = self._conn.execute(
+                "SELECT id, prerequisites FROM knowledge_points WHERE owner_id = ?",
+                (owner_id,),
+            ).fetchall()
+            for point_row in points:
+                names = json.loads(point_row["prerequisites"])
+                if name in names:
+                    updated = [item for item in names if item != name]
+                    self._conn.execute(
+                        "UPDATE knowledge_points SET prerequisites = ? WHERE id = ?",
+                        (json.dumps(updated, ensure_ascii=False), point_row["id"]),
+                    )
+
     def create_assignment(self, owner_id: str, assignment: AssignmentInput) -> str:
         assignment_id = uuid4().hex
         now = _now()
