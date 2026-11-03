@@ -636,6 +636,144 @@ textarea::placeholder { color: var(--placeholder); }
   width: min(560px, 100%);
 }
 
+.provider-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(560px, 100%);
+}
+
+.provider-item {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--white);
+  overflow: hidden;
+}
+
+.provider-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 10px 12px 10px 16px;
+}
+
+.provider-summary-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+
+.provider-name {
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.provider-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.provider-status span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: #c5cfc9;
+}
+
+.provider-status[data-state="up"] {
+  color: var(--accent);
+}
+
+.provider-status[data-state="up"] .provider-dot {
+  background: var(--accent);
+}
+
+.provider-status[data-state="down"],
+.provider-status[data-state="offline"] {
+  color: var(--danger);
+}
+
+.provider-status[data-state="down"] .provider-dot,
+.provider-status[data-state="offline"] .provider-dot {
+  background: var(--danger);
+}
+
+.provider-status[data-state="checking"] .provider-dot {
+  background: #c4a15a;
+}
+
+.provider-edit {
+  flex: none;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.provider-edit:hover {
+  border-color: var(--hover-border);
+}
+
+.provider-editor {
+  width: 100%;
+  padding: 0 12px 12px;
+}
+
+.provider-editor .api-card {
+  border-radius: 12px;
+}
+
+.provider-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 48px;
+  border: 1px dashed var(--hover-border);
+  border-radius: 14px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.provider-add:hover {
+  color: var(--ink);
+  border-color: var(--accent);
+  background: var(--hover);
+}
+
+.settings-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  z-index: 40;
+}
+
 .segment {
   display: inline-flex;
   padding: 3px;

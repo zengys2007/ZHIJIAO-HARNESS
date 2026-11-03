@@ -29,11 +29,11 @@
 - Consumes: `loadLlmSources`, `probeLlm`, `useAppearance().t`
 - Produces: 列表 UI；`expanded` 状态；添加按钮触发尚未开放 toast（可用 `role="status"` 或页面内 banner）
 
-- [ ] **Step 1: 写失败测试** — 进入 API/MCPs 先看到两行与「编辑」「添加」；点编辑才出现服务地址输入；点添加出现尚未开放。
-- [ ] **Step 2: 跑测试确认失败**
-- [ ] **Step 3: 实现列表 + 行内展开 + 样式 + 文案**
-- [ ] **Step 4: 跑测试通过；`npx tsc --noEmit`**
-- [ ] **Step 5: 提交**
+- [x] **Step 1: 写失败测试** — 进入 API/MCPs 先看到两行与「编辑」「添加」；点编辑才出现服务地址输入；点添加出现尚未开放。
+- [x] **Step 2: 跑测试确认失败**
+- [x] **Step 3: 实现列表 + 行内展开 + 样式 + 文案**
+- [x] **Step 4: 跑测试通过；`npx tsc --noEmit`**
+- [x] **Step 5: 提交**
 
 ---
 
@@ -43,6 +43,6 @@
 - Modify: `frontend/src/components/Settings.tsx`
 - Modify: `frontend/src/pages/Workbench.test.tsx`
 
-- [ ] **Step 1: 测试** — 展开自行填写时再点本机环境编辑，自行填写收起、本机展开；本机输入 disabled。
-- [ ] **Step 2: 实现每行独立 probeState（或按来源缓存）并保证互斥展开**
-- [ ] **Step 3: 测试通过并提交**
+- [x] **Step 1: 测试** — 展开自行填写时再点本机环境编辑，自行填写收起、本机展开；本机输入 disabled。
+- [x] **Step 2: 实现每行独立 probeState（或按来源缓存）并保证互斥展开**
+- [x] **Step 3: 测试通过并提交**

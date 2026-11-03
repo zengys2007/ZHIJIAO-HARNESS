@@ -128,7 +128,7 @@ describe("工作台", () => {
     }
   });
 
-  it("API 配置的本机环境读环境变量，自行填写读 .env", async () => {
+  it("API 配置默认是提供商列表，编辑后展开表单", async () => {
     const user = userEvent.setup();
     const calls: ProbeRequest[] = [];
     renderLoggedOut({
@@ -145,20 +145,30 @@ describe("工作台", () => {
     await user.click(await screen.findByRole("button", { name: "未登录" }));
     await user.click(screen.getByRole("button", { name: "API/MCPs配置" }));
 
-    expect(screen.getByRole("radio", { name: "本机环境" })).toHaveProperty("checked", true);
-    expect(screen.getByRole("textbox", { name: "服务地址" })).toHaveProperty("value", "http://env.test/v1");
-    expect((await screen.findByRole("status")).textContent).toContain("已联通");
-    expect(calls[0]).toEqual({ source: "local" });
+    expect(screen.getByRole("heading", { name: "API/MCPs配置" })).toBeTruthy();
+    expect(screen.getByText("本机环境")).toBeTruthy();
+    expect(screen.getByText("自行填写")).toBeTruthy();
+    expect(screen.queryByRole("textbox", { name: "服务地址" })).toBeNull();
+    expect(screen.getByRole("button", { name: "添加模型提供商" })).toBeTruthy();
 
-    await user.click(screen.getByRole("radio", { name: "自行填写" }));
+    await user.click(screen.getByRole("button", { name: "编辑本机环境" }));
+    expect(screen.getByRole("textbox", { name: "服务地址" })).toHaveProperty("value", "http://env.test/v1");
+    expect(screen.getByRole("textbox", { name: "服务地址" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "收起本机环境" })).toBeTruthy();
+    expect(screen.getAllByText("已联通").length).toBeGreaterThan(0);
+    expect(calls.some((c) => c.source === "local")).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: "编辑自行填写" }));
+    expect(screen.getByRole("button", { name: "编辑本机环境" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "收起自行填写" })).toBeTruthy();
     expect(screen.getByRole("textbox", { name: "服务地址" })).toHaveProperty("value", "http://file.test/v1");
+    expect(screen.getByRole("textbox", { name: "服务地址" })).toHaveProperty("disabled", false);
     expect(screen.getByRole("textbox", { name: "模型" })).toHaveProperty("value", "file-model");
-    expect(await screen.findByText("连不上这个模型服务。")).toBeTruthy();
-    expect(calls.at(-1)).toEqual({
-      source: "dotenv",
-      base_url: "http://file.test/v1",
-      model: "file-model",
-    });
+    expect((await screen.findAllByText("连不上这个模型服务。")).length).toBeGreaterThan(0);
+    expect(calls.some((c) => c.source === "dotenv")).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: "添加模型提供商" }));
+    expect(await screen.findByText("该功能尚未开放")).toBeTruthy();
   });
 
   it("空会话显示名称和引导", async () => {

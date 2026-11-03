@@ -178,6 +178,8 @@ function UserSettings(props: UserProps) {
   );
 }
 
+type ProviderId = "local" | "dotenv";
+
 function ApiConfig({
   probe,
   loadSources,
@@ -186,23 +188,26 @@ function ApiConfig({
   loadSources: (signal?: AbortSignal) => Promise<LlmSources>;
 }) {
   const { t } = useAppearance();
-  const [source, setSource] = useState<"local" | "dotenv">("local");
+  const [expanded, setExpanded] = useState<ProviderId | null>(null);
   const [sources, setSources] = useState<LlmSources | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [baseUrl, setBaseUrl] = useState("");
   const [model, setModel] = useState("");
   const [apiKey, setApiKey] = useState("");
-  const [probeState, setProbeState] = useState<ProbeState>("checking");
-  const dotenv = source === "dotenv";
+  const [probeBySource, setProbeBySource] = useState<Record<ProviderId, ProbeState>>({
+    local: "checking",
+    dotenv: "checking",
+  });
+  const [toast, setToast] = useState<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
     loadSources(controller.signal)
-      .then((loaded) => {
+      .then((loadedSources) => {
         if (controller.signal.aborted) return;
-        setSources(loaded);
-        setBaseUrl(loaded.dotenv.base_url);
-        setModel(loaded.dotenv.model);
+        setSources(loadedSources);
+        setBaseUrl(loadedSources.dotenv.base_url);
+        setModel(loadedSources.dotenv.model);
         setLoaded(true);
       })
       .catch(() => {
@@ -212,124 +217,190 @@ function ApiConfig({
   }, [loadSources]);
 
   useEffect(() => {
+    if (!loaded) return;
     const controller = new AbortController();
-    const localMissing = !dotenv && loaded && !environmentReady(sources?.environment);
-    if ((dotenv && !loaded) || localMissing) {
-      if (localMissing) setProbeState("unset");
+    if (!environmentReady(sources?.environment)) {
+      setProbeBySource((current) => ({ ...current, local: "unset" }));
       return () => controller.abort();
     }
+    setProbeBySource((current) => ({ ...current, local: "checking" }));
+    probe({ source: "local" }, controller.signal)
+      .then((result) => {
+        if (!controller.signal.aborted) {
+          setProbeBySource((current) => ({ ...current, local: result.reachable ? "up" : "down" }));
+        }
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setProbeBySource((current) => ({
+          ...current,
+          local: error instanceof DisconnectError ? "offline" : "down",
+        }));
+      });
+    return () => controller.abort();
+  }, [loaded, sources, probe]);
+
+  useEffect(() => {
+    if (!loaded) return;
+    const controller = new AbortController();
     const timer = window.setTimeout(() => {
-      setProbeState("checking");
-      const body: ProbeRequest = dotenv
-        ? {
-            source: "dotenv",
-            base_url: baseUrl.trim(),
-            model: model.trim(),
-            ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
-          }
-        : { source: "local" };
-      probe(body, controller.signal)
+      setProbeBySource((current) => ({ ...current, dotenv: "checking" }));
+      probe(
+        {
+          source: "dotenv",
+          base_url: baseUrl.trim(),
+          model: model.trim(),
+          ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
+        },
+        controller.signal,
+      )
         .then((result) => {
-          if (!controller.signal.aborted) setProbeState(result.reachable ? "up" : "down");
+          if (!controller.signal.aborted) {
+            setProbeBySource((current) => ({ ...current, dotenv: result.reachable ? "up" : "down" }));
+          }
         })
         .catch((error: unknown) => {
           if (controller.signal.aborted) return;
-          setProbeState(error instanceof DisconnectError ? "offline" : "down");
+          setProbeBySource((current) => ({
+            ...current,
+            dotenv: error instanceof DisconnectError ? "offline" : "down",
+          }));
         });
-    }, dotenv ? 400 : 0);
+    }, 400);
     return () => {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [dotenv, loaded, sources, baseUrl, model, apiKey, probe]);
+  }, [loaded, baseUrl, model, apiKey, probe]);
+
+  useEffect(() => {
+    if (toast === null) return;
+    const timer = window.setTimeout(() => setToast(null), 2500);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
 
   const environment = sources?.environment;
-  const shownUrl = dotenv ? baseUrl : environment?.base_url ?? "";
-  const shownModel = dotenv ? model : environment?.model ?? "";
-  const keyPlaceholder = dotenv
-    ? sources?.dotenv.has_api_key
-      ? t("keyKeep")
-      : t("keyEnter")
-    : environment?.has_api_key
-      ? t("keyFromEnv")
-      : t("keyMissing");
+  const providers: { id: ProviderId; name: string }[] = [
+    { id: "local", name: t("localEnv") },
+    { id: "dotenv", name: t("customEnv") },
+  ];
+
+  function toggle(id: ProviderId) {
+    setExpanded((current) => (current === id ? null : id));
+  }
+
+  function renderEditor(id: ProviderId) {
+    const dotenv = id === "dotenv";
+    const shownUrl = dotenv ? baseUrl : environment?.base_url ?? "";
+    const shownModel = dotenv ? model : environment?.model ?? "";
+    const keyPlaceholder = dotenv
+      ? sources?.dotenv.has_api_key
+        ? t("keyKeep")
+        : t("keyEnter")
+      : environment?.has_api_key
+        ? t("keyFromEnv")
+        : t("keyMissing");
+    const probeState = probeBySource[id];
+    return (
+      <form className="api-form provider-editor" onSubmit={(event) => event.preventDefault()}>
+        <div className="api-card">
+          <label className="api-row">
+            <span>{t("serviceUrl")}</span>
+            <input
+              name="base-url"
+              type="url"
+              value={shownUrl}
+              placeholder={dotenv ? "http://127.0.0.1:9" : t("urlMissing")}
+              disabled={!dotenv}
+              autoComplete="off"
+              onChange={(event) => setBaseUrl(event.target.value)}
+            />
+          </label>
+          <label className="api-row">
+            <span>{t("modelName")}</span>
+            <input
+              name="model"
+              value={shownModel}
+              placeholder={dotenv ? t("modelMissing") : t("urlMissing")}
+              disabled={!dotenv}
+              autoComplete="off"
+              onChange={(event) => setModel(event.target.value)}
+            />
+          </label>
+          <label className="api-row">
+            <span>{t("secret")}</span>
+            <input
+              name="api-key"
+              type="password"
+              value={dotenv ? apiKey : ""}
+              placeholder={keyPlaceholder}
+              disabled={!dotenv}
+              autoComplete="off"
+              onChange={(event) => setApiKey(event.target.value)}
+            />
+          </label>
+          <div className="api-row probe-row">
+            <span>{t("connected")}</span>
+            <div className="probe-status">
+              <span className="lamp" data-state={probeState} aria-hidden="true" />
+              <p className="probe-label" role="status">
+                {probeCopy(probeState, t)}
+              </p>
+            </div>
+          </div>
+        </div>
+      </form>
+    );
+  }
 
   return (
     <section className="settings" aria-label={t("connections")}>
       <div className="settings-column">
         <h1>{t("connections")}</h1>
         <p className="settings-lead">{t("apiLead")}</p>
-        <form className="api-form" onSubmit={(event) => event.preventDefault()}>
-          <div className="segment" role="radiogroup" aria-label={t("source")}>
-            <label className={source === "local" ? "is-selected" : undefined}>
-              <input
-                type="radio"
-                name="api-source"
-                value="local"
-                checked={source === "local"}
-                onChange={() => setSource("local")}
-              />
-              {t("localEnv")}
-            </label>
-            <label className={source === "dotenv" ? "is-selected" : undefined}>
-              <input
-                type="radio"
-                name="api-source"
-                value="dotenv"
-                checked={source === "dotenv"}
-                onChange={() => setSource("dotenv")}
-              />
-              {t("customEnv")}
-            </label>
-          </div>
-          <div className="api-card">
-            <label className="api-row">
-              <span>{t("serviceUrl")}</span>
-              <input
-                name="base-url"
-                type="url"
-                value={shownUrl}
-                placeholder={dotenv ? "http://127.0.0.1:9" : t("urlMissing")}
-                disabled={!dotenv}
-                autoComplete="off"
-                onChange={(event) => setBaseUrl(event.target.value)}
-              />
-            </label>
-            <label className="api-row">
-              <span>{t("modelName")}</span>
-              <input
-                name="model"
-                value={shownModel}
-                placeholder={dotenv ? t("modelMissing") : t("urlMissing")}
-                disabled={!dotenv}
-                autoComplete="off"
-                onChange={(event) => setModel(event.target.value)}
-              />
-            </label>
-            <label className="api-row">
-              <span>{t("secret")}</span>
-              <input
-                name="api-key"
-                type="password"
-                value={dotenv ? apiKey : ""}
-                placeholder={keyPlaceholder}
-                disabled={!dotenv}
-                autoComplete="off"
-                onChange={(event) => setApiKey(event.target.value)}
-              />
-            </label>
-            <div className="api-row probe-row">
-              <span>{t("connected")}</span>
-              <div className="probe-status">
-                <span className="lamp" data-state={probeState} aria-hidden="true" />
-                <p className="probe-label" role="status">
-                  {probeCopy(probeState, t)}
-                </p>
+        <div className="provider-list">
+          {providers.map((provider) => {
+            const open = expanded === provider.id;
+            const state = probeBySource[provider.id];
+            return (
+              <div key={provider.id} className={`provider-item ${open ? "is-open" : ""}`}>
+                <div className="provider-summary">
+                  <div className="provider-summary-main">
+                    <span className="provider-name">{provider.name}</span>
+                    <span className="provider-status" data-state={state}>
+                      <span className="provider-dot" aria-hidden="true" />
+                      <span>{listStatusCopy(state, t)}</span>
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className="provider-edit"
+                    aria-expanded={open}
+                    aria-label={`${open ? t("collapse") : t("edit")}${provider.name}`}
+                    onClick={() => toggle(provider.id)}
+                  >
+                    {open ? t("collapse") : t("edit")}
+                  </button>
+                </div>
+                {open ? renderEditor(provider.id) : null}
               </div>
-            </div>
-          </div>
-        </form>
+            );
+          })}
+          <button
+            type="button"
+            className="provider-add"
+            onClick={() => setToast(t("unavailable"))}
+          >
+            <span aria-hidden="true">+</span>
+            {t("addProvider")}
+          </button>
+        </div>
         <p className="hint api-note">{t("mcpNote")}</p>
+        {toast !== null ? (
+          <div className="toast-wrap settings-toast" role="status">
+            <p className="toast">{toast}</p>
+          </div>
+        ) : null}
       </div>
     </section>
   );
@@ -347,5 +418,17 @@ function probeCopy(state: ProbeState, t: (key: "checking" | "reachable" | "unrea
   if (state === "down") return t("unreachable");
   if (state === "offline") return t("offlineService");
   if (state === "unset") return t("unsetEnv");
+  return t("notChecked");
+}
+
+function listStatusCopy(
+  state: ProbeState,
+  t: (key: "checking" | "reachable" | "unreachable" | "offlineService" | "unsetShort" | "notChecked") => string,
+): string {
+  if (state === "checking") return t("checking");
+  if (state === "up") return t("reachable");
+  if (state === "down") return t("unreachable");
+  if (state === "offline") return t("offlineService");
+  if (state === "unset") return t("unsetShort");
   return t("notChecked");
 }
