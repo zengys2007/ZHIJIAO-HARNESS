@@ -84,7 +84,8 @@ def create_app(settings: Settings | None = None, complete=None, probe=None, env_
     fail_stale_tasks(repository, store, datetime.now(timezone.utc))
     registry = production_registry()
     assert_projection_budget(registry)
-    graph = build_graph(registry, complete, system=load_system_prompt())
+    system_prompt = load_system_prompt()
+    graph = build_graph(registry, complete, system=system_prompt)
     app = FastAPI()
     app.state.repository = repository
     app.state.files = store
@@ -252,17 +253,33 @@ def create_app(settings: Settings | None = None, complete=None, probe=None, env_
         except json.JSONDecodeError:
             return JSONResponse(error_payload("invalid_input"), status_code=400)
         try:
-            content = parse_message(body)
-            task = repository.submit_message(conversation_id, content, user.id)
+            content, llm_source = parse_message(body)
         except RequestError:
             return JSONResponse(error_payload("invalid_input"), status_code=400)
+        turn_graph = graph
+        if llm_source is not None:
+            values = _llm_values_for_source(llm_source, app.state.env_file)
+            if values is None:
+                return JSONResponse(error_payload("invalid_input"), status_code=400)
+            turn_settings = Settings(
+                data_dir=settings.data_dir,
+                llm_base_url=values["base_url"],
+                llm_api_key=values["api_key"],
+                llm_model=values["model"],
+                llm_timeout_seconds=settings.llm_timeout_seconds,
+                auth_secret=settings.auth_secret,
+                auth_admin_password=settings.auth_admin_password,
+            )
+            turn_graph = build_graph(registry, make_complete(turn_settings), system=system_prompt)
+        try:
+            task = repository.submit_message(conversation_id, content, user.id)
         except NotFoundError:
             return JSONResponse(error_payload("not_found"), status_code=404)
         except ConflictError:
             return JSONResponse(error_payload("conflict"), status_code=409)
         threading.Thread(
             target=run_turn,
-            args=(repository, store, graph, task.id),
+            args=(repository, store, turn_graph, task.id),
             daemon=True,
         ).start()
         return JSONResponse(
@@ -641,6 +658,13 @@ def _public_llm(values: dict[str, str]) -> dict:
     }
 
 
+def _llm_values_for_source(source: str, env_file: Path | None) -> dict[str, str] | None:
+    values = process_llm() if source == "local" else dotenv_llm(env_file)
+    if not values["base_url"] or not values["api_key"] or not values["model"]:
+        return None
+    return values
+
+
 _GOAL_RULE_MESSAGES = {
     "root goal nodes must be semester or unit": "学期总目标和单元直接挂在根上，课时目标需要挂在单元下。",
     "lesson nodes can only sit under a unit": "课时目标只能挂在单元下。",
@@ -653,4 +677,4 @@ def _goal_rule_message(exc: InputError) -> str:
 
 
 if __name__ == "__main__":
-    main()
+    main()

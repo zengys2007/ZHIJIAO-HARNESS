@@ -15,8 +15,11 @@ def parse_create_conversation(body: object) -> None:
     raise RequestError("invalid conversation body")
 
 
-def parse_message(body: object) -> str:
-    if not isinstance(body, dict) or set(body) != {"content"}:
+def parse_message(body: object) -> tuple[str, str | None]:
+    if not isinstance(body, dict):
+        raise RequestError("invalid message")
+    keys = set(body)
+    if "content" not in keys or not keys <= {"content", "llm_source"}:
         raise RequestError("invalid message")
     content = body["content"]
     if not isinstance(content, str):
@@ -24,4 +27,9 @@ def parse_message(body: object) -> str:
     text = content.strip()
     if text == "" or len(text) > 4000:
         raise RequestError("invalid message")
-    return text
+    if "llm_source" not in body:
+        return text, None
+    source = body["llm_source"]
+    if source not in ("local", "dotenv"):
+        raise RequestError("invalid message")
+    return text, source
