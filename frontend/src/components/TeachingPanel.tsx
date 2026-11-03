@@ -1,16 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { ApiRequestError, teachingApi as defaultApi } from "../api/http";
-import { useAppearance } from "../lib/appearance";
-import type {
-  BatchImportResult,
-  ClassInsights,
-  TeachingApi,
-  TeachingInsights,
-  TeachingOverview,
-  TeachingPointSummary,
-} from "../types/api";
+import { teachingApi as defaultApi } from "../api/http";
+import type { ClassInsights, TeachingApi, TeachingInsights, TeachingOverview } from "../types/api";
 import { QuickTasks } from "./QuickTasks";
-import { PointGraph } from "./PointGraph";
 
 type Props = {
   /** 测试注入：默认走后端 */
@@ -391,100 +382,23 @@ function PointsView({
   busy: boolean;
   run: (action: () => Promise<void>, successMessage: string) => Promise<void>;
 }) {
-  const { t } = useAppearance();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [prerequisites, setPrerequisites] = useState("");
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editName, setEditName] = useState("");
-  const [editDescription, setEditDescription] = useState("");
-  const [editPrerequisites, setEditPrerequisites] = useState("");
-  const [editError, setEditError] = useState<string | null>(null);
-  const [batchText, setBatchText] = useState("");
-  const [batchPreview, setBatchPreview] = useState<{ line: number; name: string; prereqs: string[] }[] | null>(null);
-  const [batchResult, setBatchResult] = useState<BatchImportResult | null>(null);
-  const [view, setView] = useState<"list" | "graph">("list");
-
-  function splitNames(text: string): string[] {
-    return text
-      .split(/[,，、]/)
-      .map((item) => item.trim())
-      .filter((item) => item.length > 0);
-  }
 
   function submit() {
     const trimmedName = name.trim();
     if (!trimmedName) return;
+    const list = prerequisites
+      .split(/[,，、]/)
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
     void run(async () => {
-      await api.createPoint(trimmedName, description.trim(), splitNames(prerequisites));
+      await api.createPoint(trimmedName, description.trim(), list);
       setName("");
       setDescription("");
       setPrerequisites("");
     }, "知识点已保存。");
-  }
-
-  function startEdit(point: TeachingPointSummary) {
-    setEditingId(point.point_id);
-    setEditName(point.name);
-    setEditDescription(point.description);
-    setEditPrerequisites(point.prerequisites.join("，"));
-    setEditError(null);
-  }
-
-  function saveEdit() {
-    if (!editingId || !editName.trim()) return;
-    void run(async () => {
-      try {
-        await api.updatePoint(editingId, editName.trim(), editDescription.trim(), splitNames(editPrerequisites));
-      } catch (error) {
-        // run 会把错误展示在全局 notice；这里同时写在表单下方的错误行，表单保持展开
-        setEditError(error instanceof Error ? error.message : "操作失败，请稍后再试。");
-        throw error;
-      }
-      setEditingId(null);
-      setEditError(null);
-    }, "知识点已更新。");
-  }
-
-  async function removePoint(point: TeachingPointSummary) {
-    if (!window.confirm(t("deletePointConfirm"))) return;
-    await run(async () => {
-      try {
-        await api.deletePoint(point.point_id);
-      } catch (error) {
-        // 有成绩记录时后端返回 409，映射成拦截提示文案
-        if (error instanceof ApiRequestError && error.status === 409) throw new Error(t("deletePointBlocked"));
-        throw error;
-      }
-    }, "知识点已删除。");
-  }
-
-  function parseBatch() {
-    const lines = batchText
-      .split("\n")
-      .map((line, index) => ({ line: index + 1, text: line.trim() }))
-      .filter((item) => item.text.length > 0);
-    setBatchResult(null);
-    setBatchPreview(
-      lines.map((item) => {
-        const parts = item.text.split(/[|｜]/).map((part) => part.trim());
-        return {
-          line: item.line,
-          name: parts[0] ?? "",
-          prereqs: parts.length >= 3 ? splitNames(parts[2]) : [],
-        };
-      }),
-    );
-  }
-
-  function submitBatch() {
-    if (!batchText.trim()) return;
-    void run(async () => {
-      const result = await api.batchImportPoints(batchText);
-      setBatchResult(result);
-      setBatchText("");
-      setBatchPreview(null);
-    }, t("importResult") + "。");
   }
 
   return (
@@ -513,87 +427,9 @@ function PointsView({
         </button>
       </section>
 
-      <details className="teaching-batch">
-        <summary>{t("batchImport")}</summary>
-        <textarea
-          value={batchText}
-          onChange={(e) => setBatchText(e.target.value)}
-          disabled={busy}
-          placeholder={t("batchImportPlaceholder")}
-        />
-        <div className="batch-actions">
-          <button type="button" disabled={busy || !batchText.trim()} onClick={parseBatch}>
-            {t("parsePreview")}
-          </button>
-          <button type="button" disabled={busy || !batchText.trim()} onClick={submitBatch}>
-            {t("confirmImport")}
-          </button>
-        </div>
-        {batchPreview ? (
-          <div className="batch-preview">
-            <p className="batch-preview-label">{t("parsePreview")}</p>
-            {batchPreview.length === 0 ? (
-              <p className="teaching-empty">没有可导入的行。</p>
-            ) : (
-              <ul className="batch-preview-list">
-                {batchPreview.map((item) => (
-                  <li key={item.line}>
-                    第 {item.line} 行：{item.name || "（未识别名称）"}
-                    {item.prereqs.length > 0 ? `（先修：${item.prereqs.join("、")}）` : ""}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        ) : null}
-        {batchResult ? (
-          <p className="batch-result">
-            {t("importResult")}：{t("importCreated")} {batchResult.created}
-            {batchResult.skipped.length > 0 ? `，${t("importSkipped")} ${batchResult.skipped.length}` : ""}
-            {batchResult.ensured_prereqs.length > 0 ? `，${t("importEnsured")} ${batchResult.ensured_prereqs.length}` : ""}
-            。
-            {batchResult.skipped.length > 0 ? (
-              <span className="batch-skipped-detail">
-                {batchResult.skipped.map((item) => `第 ${item.line} 行 ${item.name}：${item.reason}`).join("；")}
-              </span>
-            ) : null}
-          </p>
-        ) : null}
-      </details>
-
       <section className="teaching-list">
         <h2>已有知识点</h2>
-        <div className="point-view-switch">
-          <button
-            type="button"
-            className={view === "list" ? "is-active" : ""}
-            aria-pressed={view === "list"}
-            onClick={() => setView("list")}
-          >
-            {t("pointList")}
-          </button>
-          <button
-            type="button"
-            className={view === "graph" ? "is-active" : ""}
-            aria-pressed={view === "graph"}
-            onClick={() => setView("graph")}
-          >
-            {t("pointGraph")}
-          </button>
-        </div>
-
-        {view === "graph" ? (
-          <PointGraph
-            points={overview.knowledge_points}
-            onSelect={(pointId) => {
-              const point = overview.knowledge_points.find((item) => item.point_id === pointId);
-              if (point) {
-                setView("list");
-                startEdit(point);
-              }
-            }}
-          />
-        ) : overview.knowledge_points.length === 0 ? (
+        {overview.knowledge_points.length === 0 ? (
           <p className="teaching-empty">还没有知识点。录入作业成绩时用到的知识点也会自动登记。</p>
         ) : (
           overview.knowledge_points.map((item) => (
@@ -603,50 +439,8 @@ function PointsView({
                 {item.prerequisites.length > 0 ? (
                   <span className="teaching-meta">先修：{item.prerequisites.join("、")}</span>
                 ) : null}
-                <div className="teaching-item-actions">
-                  <button type="button" disabled={busy} onClick={() => startEdit(item)}>
-                    {t("editPoint")}
-                  </button>
-                  <button type="button" disabled={busy} onClick={() => void removePoint(item)}>
-                    {t("deletePoint")}
-                  </button>
-                </div>
               </div>
-              {editingId === item.point_id ? (
-                <div className="point-edit">
-                  <label className="teaching-field">
-                    <span>名称</span>
-                    <input value={editName} onChange={(e) => setEditName(e.target.value)} disabled={busy} />
-                  </label>
-                  <label className="teaching-field">
-                    <span>说明（可空）</span>
-                    <input
-                      value={editDescription}
-                      onChange={(e) => setEditDescription(e.target.value)}
-                      disabled={busy}
-                    />
-                  </label>
-                  <label className="teaching-field">
-                    <span>先修知识点（逗号分隔，可空）</span>
-                    <input
-                      value={editPrerequisites}
-                      onChange={(e) => setEditPrerequisites(e.target.value)}
-                      disabled={busy}
-                    />
-                  </label>
-                  {editError ? <p className="point-edit-error">{editError}</p> : null}
-                  <div className="teaching-item-actions">
-                    <button type="button" disabled={busy || !editName.trim()} onClick={saveEdit}>
-                      {t("saveChanges")}
-                    </button>
-                    <button type="button" disabled={busy} onClick={() => setEditingId(null)}>
-                      {t("cancelEdit")}
-                    </button>
-                  </div>
-                </div>
-              ) : item.description ? (
-                <p className="teaching-item-body">{item.description}</p>
-              ) : null}
+              {item.description ? <p className="teaching-item-body">{item.description}</p> : null}
             </article>
           ))
         )}

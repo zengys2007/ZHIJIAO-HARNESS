@@ -26,8 +26,6 @@ MAX_POINTS = 200
 MAX_PREREQUISITES = 10
 MAX_CONTENT_CHARS = 20000
 MAX_SCORE = 100
-MAX_BATCH_CHARS = 100_000
-BATCH_LINE_MESSAGE = "每行写成「名称 | 说明 | 先修1,先修2」，说明和先修可以留空。"
 
 
 def parse_create_class(body: object) -> tuple[str, list[str]]:
@@ -60,50 +58,6 @@ def parse_create_point(body: object) -> tuple[str, str, list[str]]:
         raise RequestError("prerequisites", public_message="先修知识点写成不超过 10 个名字的列表。")
     prerequisites = [_point_name(item) for item in raw_prerequisites]
     return name, description.strip(), prerequisites
-
-
-def parse_update_point(body: object) -> tuple[str, str, list[str]]:
-    """与 parse_create_point 相同的结构校验。"""
-    return parse_create_point(body)
-
-
-def parse_batch_points(body: object) -> list[tuple[int, str, str, list[str]]]:
-    """解析批量导入文本。每行「名称 | 说明 | 先修1,先修2」，行内分隔符 | 或 ｜，先修分隔 , ， 、。"""
-    if not isinstance(body, dict) or not set(body) <= {"text"}:
-        raise RequestError("fields", public_message=UNKNOWN_FIELD_MESSAGE)
-    text = body.get("text")
-    if not isinstance(text, str) or not text.strip():
-        raise RequestError("text", public_message=BATCH_LINE_MESSAGE)
-    if len(text) > MAX_BATCH_CHARS:
-        raise RequestError("text", public_message="批量导入文本不超过 10 万字符。")
-    entries: list[tuple[int, str, str, list[str]]] = []
-    for line_number, raw_line in enumerate(text.splitlines(), start=1):
-        line = raw_line.strip()
-        if not line:
-            continue
-        parts = [part.strip() for part in re.split(r"[|｜]", line)]
-        if len(parts) > 3:
-            raise RequestError("text", public_message=BATCH_LINE_MESSAGE)
-        name = _point_name(parts[0])
-        description = ""
-        prerequisites: list[str] = []
-        if len(parts) >= 2 and parts[1]:
-            description = parts[1]
-            if len(description) > 500:
-                raise RequestError("description", public_message="说明写成不超过 500 个字。")
-        if len(parts) == 3 and parts[2]:
-            seen: set[str] = set()
-            for item in re.split(r"[,，、]", parts[2]):
-                if not item.strip():
-                    continue
-                point_name = _point_name(item.strip())
-                if point_name not in seen:
-                    seen.add(point_name)
-                    prerequisites.append(point_name)
-        entries.append((line_number, name, description, prerequisites))
-    if not entries:
-        raise RequestError("text", public_message="没有可导入的行。")
-    return entries
 
 
 def parse_create_assignment(body: object) -> AssignmentInput:

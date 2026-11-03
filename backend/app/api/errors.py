@@ -12,7 +12,6 @@ ERRORS: dict[str, tuple[str, bool]] = {
     "interrupted": ("这次处理被中断了，可以再发一次。", True),
     "storage_failed": ("回复没有保存成功，可以再发一次。", True),
     "internal": ("系统出错了，可以再发一次。", True),
-    "cycle": ("先修关系成环，请调整先修顺序。", False),
 }
 
 

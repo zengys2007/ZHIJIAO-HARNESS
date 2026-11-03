@@ -257,34 +257,6 @@ export const teachingApi: TeachingApi = {
     });
     return { document_id: readId(body, "document_id") };
   },
-  updatePoint: async (pointId, name, description, prerequisites) => {
-    await request(`/api/teaching/points/${pointId}`, {
-      method: "PUT",
-      body: JSON.stringify({ name, description, prerequisites }),
-    });
-  },
-  // DELETE 返回 204 空体：parseBody 对空文本返回 null，request() 不会抛错
-  deletePoint: async (pointId) => {
-    await request(`/api/teaching/points/${pointId}`, { method: "DELETE" });
-  },
-  batchImportPoints: async (text) => {
-    const body = await request("/api/teaching/points/batch", {
-      method: "POST",
-      body: JSON.stringify({ text }),
-    });
-    const record = recordOf(body);
-    return {
-      created: typeof record.created === "number" ? record.created : 0,
-      skipped: readList(record.skipped, (r) => ({
-        line: typeof r.line === "number" ? r.line : 0,
-        name: readText(r.name),
-        reason: readText(r.reason),
-      })),
-      ensured_prereqs: Array.isArray(record.ensured_prereqs)
-        ? record.ensured_prereqs.filter((s): s is string => typeof s === "string")
-        : [],
-    };
-  },
 };
 
 function readOverview(body: unknown): TeachingOverview {
