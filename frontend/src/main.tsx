@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { applyAppearance, loadAppearance } from "./lib/appearance";
+import { AppearanceProvider, applyAppearance, loadAppearance } from "./lib/appearance";
 import { Workbench } from "./pages/Workbench";
 import "./styles.css";
 
@@ -11,6 +11,8 @@ if (!root) throw new Error("缺少根节点");
 
 createRoot(root).render(
   <StrictMode>
-    <Workbench />
+    <AppearanceProvider>
+      <Workbench />
+    </AppearanceProvider>
   </StrictMode>,
 );
