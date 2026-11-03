@@ -173,6 +173,13 @@ export type AssignmentRecordInput = {
   scores: Record<string, number>;
 };
 
+/** POST /api/teaching/points/batch 的返回 */
+export type BatchImportResult = {
+  created: number;
+  skipped: { line: number; name: string; reason: string }[];
+  ensured_prereqs: string[];
+};
+
 /** 教学上下文 API。测试可注入桩实现 */
 export type TeachingApi = {
   loadOverview(): Promise<TeachingOverview>;
@@ -190,4 +197,10 @@ export type TeachingApi = {
     title: string,
     content: string,
   ): Promise<{ document_id: string }>;
+  /** 编辑知识点：改名同步引用；先修引用不存在时后端自动补建 */
+  updatePoint(pointId: string, name: string, description: string, prerequisites: string[]): Promise<void>;
+  /** 删除知识点；有成绩记录时后端 409 */
+  deletePoint(pointId: string): Promise<void>;
+  /** 批量导入：每行「名称 | 说明 | 先修1,先修2」 */
+  batchImportPoints(text: string): Promise<BatchImportResult>;
 };
