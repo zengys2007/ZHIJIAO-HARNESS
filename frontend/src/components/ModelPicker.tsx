@@ -37,9 +37,6 @@ export function ModelPicker({ selected, onSelect, onClose, loadSources, onLoadEr
         if (sourceReady(sources.environment)) {
           next.push({ source: "local", group: t("localEnv"), model: sources.environment.model });
         }
-        if (sourceReady(sources.dotenv)) {
-          next.push({ source: "dotenv", group: t("customEnv"), model: sources.dotenv.model });
-        }
         setRows(next);
       })
       .catch(() => {
@@ -78,7 +75,7 @@ export function ModelPicker({ selected, onSelect, onClose, loadSources, onLoadEr
 
   const groups = useMemo(() => {
     if (!filtered) return [];
-    const order: LlmSourceId[] = ["local", "dotenv"];
+    const order: LlmSourceId[] = ["local"];
     return order
       .map((source) => {
         const items = filtered.filter((row) => row.source === source);

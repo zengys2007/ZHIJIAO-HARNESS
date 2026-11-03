@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AuthUser, ConversationApi, ConversationMessage, TaskSnapshot } from "../types/api";
@@ -128,13 +128,13 @@ describe("工作台", () => {
     }
   });
 
-  it("API 配置默认是提供商列表，编辑后展开参考图版式面板", async () => {
+  it("API 配置去掉自行填写，可添加编辑删除本地提供商", async () => {
     const user = userEvent.setup();
     const calls: ProbeRequest[] = [];
     renderLoggedOut({
       loadSources: async () => ({
         environment: { base_url: "http://env.test/v1", model: "env-model", has_api_key: true },
-        dotenv: { base_url: "http://file.test/v1", model: "file-model", has_api_key: false },
+        dotenv: { base_url: "", model: "", has_api_key: false },
       }),
       probe: async (body) => {
         calls.push(body);
@@ -147,37 +147,33 @@ describe("工作台", () => {
 
     expect(screen.getByRole("heading", { name: "API/MCPs配置" })).toBeTruthy();
     expect(screen.getByText("本机环境")).toBeTruthy();
-    expect(screen.getByText("自行填写")).toBeTruthy();
-    expect(screen.queryByRole("textbox", { name: "API 地址" })).toBeNull();
+    expect(screen.queryByText("自行填写")).toBeNull();
     expect(screen.getByRole("button", { name: "添加模型提供商" })).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "编辑本机环境" }));
-    expect(screen.getByText("local")).toBeTruthy();
-    expect(screen.getByRole("textbox", { name: "API 地址" })).toHaveProperty("value", "http://env.test/v1");
     expect(screen.getByRole("textbox", { name: "API 地址" })).toHaveProperty("disabled", true);
-    expect(screen.getByRole("textbox", { name: "模型" })).toHaveProperty("disabled", true);
-    expect(screen.getByRole("button", { name: "取消" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "保存" })).toBeTruthy();
-    expect(screen.getAllByText("已联通").length).toBeGreaterThan(0);
     expect(calls.some((c) => c.source === "local")).toBe(true);
-
-    await user.click(screen.getByRole("button", { name: "编辑自行填写" }));
-    expect(screen.getByRole("button", { name: "编辑本机环境" })).toBeTruthy();
-    expect(screen.getByText("dotenv")).toBeTruthy();
-    expect(screen.getByRole("textbox", { name: "API 地址" })).toHaveProperty("value", "http://file.test/v1");
-    expect(screen.getByRole("textbox", { name: "API 地址" })).toHaveProperty("disabled", false);
-    expect(screen.getByRole("textbox", { name: "模型" })).toHaveProperty("value", "file-model");
-    expect(screen.getByText(/未检测到密钥/)).toBeTruthy();
-    await waitFor(() => expect(calls.some((c) => c.source === "dotenv")).toBe(true));
-
-    await user.clear(screen.getByRole("textbox", { name: "API 地址" }));
-    await user.type(screen.getByRole("textbox", { name: "API 地址" }), "http://edited.test/v1");
     await user.click(screen.getByRole("button", { name: "取消" }));
-    await user.click(screen.getByRole("button", { name: "编辑自行填写" }));
-    expect(screen.getByRole("textbox", { name: "API 地址" })).toHaveProperty("value", "http://file.test/v1");
 
-    await user.click(screen.getByRole("button", { name: "添加模型" }));
-    expect(await screen.findByText("该功能尚未开放")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "添加模型提供商" }));
+    await user.type(screen.getByRole("textbox", { name: "名称" }), "amazon-bedrock");
+    await user.type(screen.getByRole("textbox", { name: "API 地址" }), "https://bedrock.example/v1");
+    await user.type(screen.getByRole("textbox", { name: "模型" }), "bedrock-model");
+    await user.click(screen.getByRole("button", { name: "添加" }));
+
+    expect(screen.getByText("amazon-bedrock")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "编辑amazon-bedrock" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "删除amazon-bedrock" })).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "编辑amazon-bedrock" }));
+    const nameInput = screen.getByRole("textbox", { name: "名称" });
+    await user.clear(nameInput);
+    await user.type(nameInput, "bedrock-renamed");
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    expect(screen.getByText("bedrock-renamed")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "删除bedrock-renamed" }));
+    expect(screen.queryByText("bedrock-renamed")).toBeNull();
   });
 
   it("空会话显示名称和引导", async () => {
@@ -351,7 +347,7 @@ describe("工作台", () => {
       api,
       loadSources: async () => ({
         environment: { base_url: "http://env.test/v1", model: "env-model", has_api_key: true },
-        dotenv: { base_url: "http://file.test/v1", model: "file-model", has_api_key: true },
+        dotenv: { base_url: "", model: "", has_api_key: false },
       }),
       probe: async () => ({ reachable: true }),
     });
@@ -364,14 +360,13 @@ describe("工作台", () => {
     expect(screen.getByRole("dialog", { name: "模型" })).toBeTruthy();
     expect(screen.getByPlaceholderText("搜索模型...")).toBeTruthy();
     expect(await screen.findByRole("option", { name: /env-model/ })).toBeTruthy();
-    expect(screen.getByRole("option", { name: /file-model/ })).toBeTruthy();
 
-    await user.click(screen.getByRole("option", { name: /file-model/ }));
+    await user.click(screen.getByRole("option", { name: /env-model/ }));
     expect(screen.queryByRole("dialog", { name: "模型" })).toBeNull();
 
-    await user.type(screen.getByLabelText("消息"), "用文件模型");
+    await user.type(screen.getByLabelText("消息"), "用本机模型");
     await user.click(screen.getByRole("button", { name: "发送" }));
-    expect(sent.some((item) => item.content === "用文件模型" && item.options?.llmSource === "dotenv")).toBe(
+    expect(sent.some((item) => item.content === "用本机模型" && item.options?.llmSource === "local")).toBe(
       true,
     );
   });

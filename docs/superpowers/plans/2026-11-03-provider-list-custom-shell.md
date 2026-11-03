@@ -22,12 +22,12 @@
 - Create: `frontend/src/lib/providers.ts`（类型、load/save）
 - Modify: `Settings.tsx`、`appearance.tsx`、`styles.css`、`Workbench.test.tsx`
 
-- [ ] 测试：无自行填写；可添加一行；删除消失；刷新（localStorage）仍在。
-- [ ] 实现存储与列表/对话框。
-- [ ] vitest + tsc；提交。
+- [x] 测试：无自行填写；可添加一行；删除消失；刷新（localStorage）仍在。
+- [x] 实现存储与列表/对话框。
+- [x] vitest + tsc；提交。
 
 ### Task 2: 自定义行编辑保存
 
-- [ ] 测试：编辑自定义行改名称/地址后保存，再打开仍是新值；取消还原。
-- [ ] 实现草稿与 save 写回 localStorage。
-- [ ] 测试通过并提交。
+- [x] 测试：编辑自定义行改名称/地址后保存，再打开仍是新值；取消还原。
+- [x] 实现草稿与 save 写回 localStorage。
+- [x] 测试通过并提交。

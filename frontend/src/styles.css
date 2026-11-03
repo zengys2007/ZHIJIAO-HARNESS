@@ -735,6 +735,66 @@ textarea::placeholder { color: var(--placeholder); }
   border-color: var(--hover-border);
 }
 
+.provider-summary-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.provider-delete {
+  flex: none;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--line));
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--danger);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.provider-delete:hover {
+  background: color-mix(in srgb, var(--danger) 8%, var(--white));
+}
+
+.provider-add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--card);
+}
+
+.provider-add-heading {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.provider-editor-title-edit {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+
+.provider-editor-title-edit input {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--white);
+  color: var(--ink);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+}
+
 .provider-editor {
   width: 100%;
   padding: 0 12px 14px;
