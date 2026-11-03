@@ -2281,3 +2281,36 @@ button:focus-visible {
   border-color: var(--accent);
   color: var(--accent);
 }
+
+.point-graph-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--white);
+  padding: 8px;
+}
+
+.point-graph .point-edge {
+  stroke: var(--faint);
+  stroke-width: 1.5;
+}
+
+.point-graph .point-node-box {
+  fill: var(--user);
+  stroke: var(--accent);
+  stroke-width: 1;
+}
+
+.point-graph .point-node.is-cyclic .point-node-box {
+  fill: var(--danger-bg);
+  stroke: var(--danger);
+}
+
+.point-graph .point-node text {
+  font-size: 13px;
+  fill: var(--ink);
+}
+
+.point-graph .point-node {
+  cursor: pointer;
+}

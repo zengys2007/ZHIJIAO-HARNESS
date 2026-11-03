@@ -10,6 +10,7 @@ import type {
   TeachingPointSummary,
 } from "../types/api";
 import { QuickTasks } from "./QuickTasks";
+import { PointGraph } from "./PointGraph";
 
 type Props = {
   /** 测试注入：默认走后端 */
@@ -582,7 +583,16 @@ function PointsView({
         </div>
 
         {view === "graph" ? (
-          <GraphView />
+          <PointGraph
+            points={overview.knowledge_points}
+            onSelect={(pointId) => {
+              const point = overview.knowledge_points.find((item) => item.point_id === pointId);
+              if (point) {
+                setView("list");
+                startEdit(point);
+              }
+            }}
+          />
         ) : overview.knowledge_points.length === 0 ? (
           <p className="teaching-empty">还没有知识点。录入作业成绩时用到的知识点也会自动登记。</p>
         ) : (
@@ -643,11 +653,6 @@ function PointsView({
       </section>
     </div>
   );
-}
-
-/** 图谱视图占位：Task 7 会接入真正的先修依赖图 */
-function GraphView() {
-  return <p className="teaching-empty">图谱视图即将接入，可先在列表中查看和编辑知识点。</p>;
 }
 
 // ===== 作业成绩 =====

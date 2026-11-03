@@ -141,16 +141,19 @@ describe("教学面板·知识点", () => {
     expect(screen.queryByText(/第 1 行：通分/)).toBeNull();
   });
 
-  it("视图切换到图谱时显示占位，回到列表恢复编辑入口", async () => {
+  it("视图切换到图谱显示分层图，点节点回到列表并展开编辑", async () => {
     renderPanel(makeApi());
     const { user } = await openPointsTab();
 
     await user.click(screen.getByRole("button", { name: "图谱" }));
-    expect(screen.getByText("图谱视图即将接入，可先在列表中查看和编辑知识点。")).toBeTruthy();
-    expect(screen.queryByText("约分")).toBeNull();
+    expect(document.querySelector("svg.point-graph")).not.toBeNull();
+    // 图谱视图里没有列表项的编辑/删除入口，节点以图谱文本呈现
+    expect(screen.queryByRole("button", { name: "编辑" })).toBeNull();
+    expect(screen.getByText("约分").closest("g.point-node")).not.toBeNull();
 
-    await user.click(screen.getByRole("button", { name: "列表" }));
-    expect(await screen.findByText("约分")).toBeTruthy();
-    expect(screen.queryByText(/图谱视图即将接入/)).toBeNull();
+    fireEvent.click(screen.getByText("约分").closest("g.point-node")!);
+    const article = (await screen.findByText("约分")).closest("article")!;
+    expect(within(article).getByRole("button", { name: "保存修改" })).toBeTruthy();
+    expect((within(article).getByLabelText("名称") as HTMLInputElement).value).toBe("约分");
   });
 });
