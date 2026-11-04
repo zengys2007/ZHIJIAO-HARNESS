@@ -72,12 +72,36 @@ class FileStore:
         if directory.exists():
             shutil.rmtree(directory)
 
+    def write_knowledge(self, owner_id: str, document_id: str, data: bytes) -> Path:
+        self._check_knowledge_id(owner_id)
+        self._check_knowledge_id(document_id)
+        target = self.root / "knowledge" / owner_id / document_id / "original"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        return target
+
+    def remove_knowledge(self, owner_id: str, document_id: str) -> None:
+        self._check_knowledge_id(owner_id)
+        self._check_knowledge_id(document_id)
+        directory = self.root / "knowledge" / owner_id / document_id
+        if directory.exists():
+            shutil.rmtree(directory)
+
     def _check_id(self, value: str) -> None:
         if not isinstance(value, str) or not value or any(char not in _ID_CHARS for char in value):
             raise ValueError("unsafe id")
 
+    def _check_knowledge_id(self, value: str) -> None:
+        if (
+            not isinstance(value, str)
+            or len(value) != 32
+            or any(char not in _KNOWLEDGE_ID_CHARS for char in value)
+        ):
+            raise ValueError("unsafe id")
+
 
 _ID_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
+_KNOWLEDGE_ID_CHARS = set("0123456789abcdef")
 
 
 def safe_relative(relative: str) -> Path:

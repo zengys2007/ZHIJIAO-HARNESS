@@ -20,6 +20,8 @@ from app.storage.protocol import (
     GoalNode,
     GoalTree,
     InputError,
+    KnowledgeChunk,
+    KnowledgeDocument,
     KnowledgePoint,
     NotFoundError,
     ScoreCell,
@@ -1099,6 +1101,156 @@ class SqliteRepository:
             documents=documents,
         )
 
+    def insert_knowledge_document(
+        self,
+        owner_id: str,
+        title: str,
+        source: str,
+        filename: str,
+        extension: str,
+        status: str = "pending",
+        message: str = "",
+    ) -> KnowledgeDocument:
+        document_id = uuid4().hex
+        created_at = _now()
+        with self.transaction():
+            self._conn.execute(
+                """
+                INSERT INTO knowledge_documents (
+                  id, owner_id, title, source, filename, extension, status, message, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (document_id, owner_id, title, source, filename, extension, status, message, created_at),
+            )
+        return KnowledgeDocument(
+            id=document_id,
+            owner_id=owner_id,
+            title=title,
+            source=source,
+            filename=filename,
+            extension=extension,
+            status=status,
+            message=message,
+            created_at=created_at,
+        )
+
+    def count_knowledge_documents(self, owner_id: str) -> int:
+        row = self._conn.execute(
+            "SELECT COUNT(*) AS total FROM knowledge_documents WHERE owner_id = ?",
+            (owner_id,),
+        ).fetchone()
+        return int(row["total"])
+
+    def list_knowledge_documents(self, owner_id: str) -> list[KnowledgeDocument]:
+        rows = self._conn.execute(
+            """
+            SELECT * FROM knowledge_documents
+            WHERE owner_id = ?
+            ORDER BY created_at, id
+            """,
+            (owner_id,),
+        )
+        return [_knowledge_document(row) for row in rows]
+
+    def get_knowledge_document(self, document_id: str, owner_id: str) -> KnowledgeDocument | None:
+        row = self._conn.execute(
+            "SELECT * FROM knowledge_documents WHERE id = ? AND owner_id = ?",
+            (document_id, owner_id),
+        ).fetchone()
+        if row is None:
+            return None
+        return _knowledge_document(row)
+
+    def replace_knowledge_chunks(
+        self, document_id: str, owner_id: str, chunks: list[tuple[str, int]]
+    ) -> None:
+        owned = self._conn.execute(
+            "SELECT id FROM knowledge_documents WHERE id = ? AND owner_id = ?",
+            (document_id, owner_id),
+        ).fetchone()
+        if owned is None:
+            return
+        with self.transaction():
+            self._conn.execute(
+                "DELETE FROM knowledge_chunks WHERE document_id = ? AND owner_id = ?",
+                (document_id, owner_id),
+            )
+            for ordinal, (text, token_count) in enumerate(chunks):
+                self._conn.execute(
+                    """
+                    INSERT INTO knowledge_chunks (
+                      id, document_id, owner_id, ordinal, text, embedding,
+                      dimensions, embedding_model, token_count
+                    ) VALUES (?, ?, ?, ?, ?, NULL, 0, '', ?)
+                    """,
+                    (uuid4().hex, document_id, owner_id, ordinal, text, int(token_count)),
+                )
+
+    def list_knowledge_chunks(self, owner_id: str) -> list[KnowledgeChunk]:
+        rows = self._conn.execute(
+            """
+            SELECT c.* FROM knowledge_chunks c
+            JOIN knowledge_documents d ON d.id = c.document_id AND d.owner_id = c.owner_id
+            WHERE c.owner_id = ?
+            ORDER BY d.created_at, d.id, c.ordinal
+            """,
+            (owner_id,),
+        )
+        return [_knowledge_chunk(row) for row in rows]
+
+    def save_knowledge_embeddings(
+        self, document_id: str, owner_id: str, model: str, vectors: list[bytes]
+    ) -> None:
+        count = self._conn.execute(
+            "SELECT COUNT(*) AS total FROM knowledge_chunks WHERE document_id = ? AND owner_id = ?",
+            (document_id, owner_id),
+        ).fetchone()["total"]
+        if count != len(vectors):
+            raise InputError("embedding count does not match chunks")
+        with self.transaction():
+            for ordinal, vector in enumerate(vectors):
+                if not isinstance(vector, bytes) or len(vector) % 4 != 0:
+                    raise InputError("invalid embedding")
+                cursor = self._conn.execute(
+                    """
+                    UPDATE knowledge_chunks
+                    SET embedding = ?, dimensions = ?, embedding_model = ?
+                    WHERE document_id = ? AND owner_id = ? AND ordinal = ?
+                    """,
+                    (vector, len(vector) // 4, model, document_id, owner_id, ordinal),
+                )
+                if cursor.rowcount != 1:
+                    raise InputError("embedding count does not match chunks")
+
+    def set_knowledge_status(self, document_id: str, owner_id: str, status: str, message: str) -> None:
+        with self.transaction():
+            self._conn.execute(
+                """
+                UPDATE knowledge_documents
+                SET status = ?, message = ?
+                WHERE id = ? AND owner_id = ?
+                """,
+                (status, message, document_id, owner_id),
+            )
+
+    def delete_knowledge_document(self, document_id: str, owner_id: str) -> bool:
+        with self.transaction():
+            owned = self._conn.execute(
+                "SELECT id FROM knowledge_documents WHERE id = ? AND owner_id = ?",
+                (document_id, owner_id),
+            ).fetchone()
+            if owned is None:
+                return False
+            self._conn.execute(
+                "DELETE FROM knowledge_chunks WHERE document_id = ? AND owner_id = ?",
+                (document_id, owner_id),
+            )
+            self._conn.execute(
+                "DELETE FROM knowledge_documents WHERE id = ? AND owner_id = ?",
+                (document_id, owner_id),
+            )
+        return True
+
     def _ensure_student(self, class_id: str, name: str, now: str) -> str:
         row = self._conn.execute(
             "SELECT id FROM students WHERE class_id = ? AND name = ?", (class_id, name)
@@ -1296,6 +1448,33 @@ class SqliteRepository:
             CREATE INDEX IF NOT EXISTS idx_assignments_class ON assignments (class_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_scores_assignment ON scores (assignment_id);
             CREATE INDEX IF NOT EXISTS idx_students_class ON students (class_id);
+            CREATE TABLE IF NOT EXISTS knowledge_documents (
+              id TEXT PRIMARY KEY,
+              owner_id TEXT NOT NULL,
+              title TEXT NOT NULL,
+              source TEXT NOT NULL,
+              filename TEXT NOT NULL,
+              extension TEXT NOT NULL,
+              status TEXT NOT NULL,
+              message TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS knowledge_chunks (
+              id TEXT PRIMARY KEY,
+              document_id TEXT NOT NULL,
+              owner_id TEXT NOT NULL,
+              ordinal INTEGER NOT NULL,
+              text TEXT NOT NULL,
+              embedding BLOB,
+              dimensions INTEGER NOT NULL DEFAULT 0,
+              embedding_model TEXT NOT NULL DEFAULT '',
+              token_count INTEGER NOT NULL,
+              UNIQUE (document_id, ordinal)
+            );
+            CREATE INDEX IF NOT EXISTS idx_knowledge_documents_owner
+              ON knowledge_documents (owner_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_document
+              ON knowledge_chunks (document_id, owner_id, ordinal);
             """
         )
 
@@ -1404,6 +1583,37 @@ def _goal_tree(row: sqlite3.Row) -> GoalTree:
         title=row["title"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+    )
+
+
+def _knowledge_document(row: sqlite3.Row) -> KnowledgeDocument:
+    return KnowledgeDocument(
+        id=row["id"],
+        owner_id=row["owner_id"],
+        title=row["title"],
+        source=row["source"],
+        filename=row["filename"],
+        extension=row["extension"],
+        status=row["status"],
+        message=row["message"],
+        created_at=row["created_at"],
+    )
+
+
+def _knowledge_chunk(row: sqlite3.Row) -> KnowledgeChunk:
+    embedding = row["embedding"]
+    if isinstance(embedding, memoryview):
+        embedding = embedding.tobytes()
+    return KnowledgeChunk(
+        id=row["id"],
+        document_id=row["document_id"],
+        owner_id=row["owner_id"],
+        ordinal=row["ordinal"],
+        text=row["text"],
+        embedding=embedding,
+        dimensions=row["dimensions"],
+        embedding_model=row["embedding_model"],
+        token_count=row["token_count"],
     )
 
 

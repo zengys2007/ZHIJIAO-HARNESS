@@ -189,6 +189,32 @@ class AssignmentInput:
     records: list
 
 
+@dataclass
+class KnowledgeDocument:
+    id: str
+    owner_id: str
+    title: str
+    source: str
+    filename: str
+    extension: str
+    status: str
+    message: str
+    created_at: str
+
+
+@dataclass
+class KnowledgeChunk:
+    id: str
+    document_id: str
+    owner_id: str
+    ordinal: int
+    text: str
+    embedding: bytes | None
+    dimensions: int
+    embedding_model: str
+    token_count: int
+
+
 class Repository(Protocol):
     def create_user(self, username: str, display_name: str, password_hash: str) -> User: ...
 
@@ -340,6 +366,37 @@ class Repository(Protocol):
     def create_assignment(self, owner_id: str, assignment: AssignmentInput) -> str: ...
 
     def create_document(self, owner_id: str, doc_type: str, title: str, content: str) -> str: ...
+
+    def insert_knowledge_document(
+        self,
+        owner_id: str,
+        title: str,
+        source: str,
+        filename: str,
+        extension: str,
+        status: str = "pending",
+        message: str = "",
+    ) -> KnowledgeDocument: ...
+
+    def count_knowledge_documents(self, owner_id: str) -> int: ...
+
+    def list_knowledge_documents(self, owner_id: str) -> list[KnowledgeDocument]: ...
+
+    def get_knowledge_document(self, document_id: str, owner_id: str) -> KnowledgeDocument | None: ...
+
+    def replace_knowledge_chunks(
+        self, document_id: str, owner_id: str, chunks: list[tuple[str, int]]
+    ) -> None: ...
+
+    def list_knowledge_chunks(self, owner_id: str) -> list[KnowledgeChunk]: ...
+
+    def save_knowledge_embeddings(
+        self, document_id: str, owner_id: str, model: str, vectors: list[bytes]
+    ) -> None: ...
+
+    def set_knowledge_status(self, document_id: str, owner_id: str, status: str, message: str) -> None: ...
+
+    def delete_knowledge_document(self, document_id: str, owner_id: str) -> bool: ...
 
     def load_teaching(self, owner_id: str) -> TeachingData: ...
 
