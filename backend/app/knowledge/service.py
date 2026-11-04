@@ -54,6 +54,7 @@ def create_paste(
     _ensure_capacity(repo, owner_id)
     chunks = _chunk_or_reject(text)
     with repo.transaction():
+        _ensure_capacity(repo, owner_id)
         document = repo.insert_knowledge_document(
             owner_id,
             cleaned_title,
@@ -88,6 +89,7 @@ def create_upload(
         return _save_empty_upload(repo, store, owner_id, cleaned_title, basename, extension, payload)
     chunks = _chunk_or_reject(text)
     with repo.transaction():
+        _ensure_capacity(repo, owner_id)
         document = repo.insert_knowledge_document(
             owner_id,
             cleaned_title,
@@ -130,8 +132,8 @@ def display_document(
 
 
 def _embed_held(repo, document_id: str, owner_id: str, embedder: Embedder) -> None:
-    model = embedding_model_name()
-    if model == "":
+    pinned = embedding_model_name()
+    if pinned == "":
         return
     document = repo.get_knowledge_document(document_id, owner_id)
     if document is None:
@@ -142,14 +144,13 @@ def _embed_held(repo, document_id: str, owner_id: str, embedder: Embedder) -> No
         return
     texts = [chunk.text for chunk in chunks]
     vectors = _call_embedder(embedder, texts)
+    if vectors is None and embedding_model_name() == "":
+        return
     if not _valid_vectors(vectors, len(texts)):
         repo.set_knowledge_status(document_id, owner_id, "failed", EMBED_FAILED_MESSAGE)
         return
-    model = embedding_model_name()
-    if model == "":
-        return
     packed = [pack_vector([float(value) for value in vector]) for vector in vectors]
-    repo.save_knowledge_embeddings(document_id, owner_id, model, packed)
+    repo.save_knowledge_embeddings(document_id, owner_id, pinned, packed)
     repo.set_knowledge_status(document_id, owner_id, "ready", "")
 
 
@@ -290,6 +291,7 @@ def _extract_or_reject(extension: str, data: bytes) -> str:
 
 def _save_empty_upload(repo, store, owner_id: str, title: str, basename: str, extension: str, data: bytes):
     with repo.transaction():
+        _ensure_capacity(repo, owner_id)
         document = repo.insert_knowledge_document(
             owner_id,
             title,

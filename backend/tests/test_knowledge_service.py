@@ -100,6 +100,68 @@ def test_fifty_first_document_is_rejected(tmp_path, monkeypatch):
     assert repository.count_knowledge_documents(other) == 1
 
 
+def test_failed_documents_count_toward_the_cap(tmp_path, monkeypatch):
+    monkeypatch.setenv("LLM_EMBEDDING_MODEL", "embed-unit")
+    repository, store, owner = _upload_world(tmp_path)
+    _fill_failed_documents(repository, owner, 50)
+    jobs: list = []
+
+    with pytest.raises(RequestError) as rejected:
+        create_paste(repository, owner, "再一份", "通分。", _vectors, jobs.append)
+    assert rejected.value.public_message == COUNT_MESSAGE
+
+    with pytest.raises(RequestError) as rejected:
+        create_upload(
+            repository,
+            store,
+            owner,
+            "blank.pdf",
+            _blank_pdf(),
+            "空白卷",
+            _vectors,
+            jobs.append,
+        )
+    assert rejected.value.public_message == COUNT_MESSAGE
+    assert repository.count_knowledge_documents(owner) == 50
+    assert jobs == []
+    assert not (store.root / "knowledge").exists()
+
+
+def test_overlapping_pastes_cannot_both_pass_the_cap(tmp_path, monkeypatch):
+    monkeypatch.setenv("LLM_EMBEDDING_MODEL", "embed-unit")
+    repository = SqliteRepository(tmp_path / "knowledge.db")
+    owner = uuid4().hex
+    _fill_failed_documents(repository, owner, 49)
+
+    def create(label):
+        return create_paste(repository, owner, label, "通分。", _vectors, lambda _job: None)
+
+    _assert_one_create_takes_the_last_slot(repository, owner, create)
+
+
+def test_overlapping_empty_uploads_cannot_both_pass_the_cap(tmp_path, monkeypatch):
+    monkeypatch.setenv("LLM_EMBEDDING_MODEL", "embed-unit")
+    repository, store, owner = _upload_world(tmp_path)
+    _fill_failed_documents(repository, owner, 49)
+    payload = _blank_pdf()
+    jobs: list = []
+
+    def create(label):
+        return create_upload(
+            repository,
+            store,
+            owner,
+            f"{label}.pdf",
+            payload,
+            label,
+            _vectors,
+            jobs.append,
+        )
+
+    _assert_one_create_takes_the_last_slot(repository, owner, create)
+    assert jobs == []
+
+
 def test_unknown_extension_is_not_stored(tmp_path, monkeypatch):
     monkeypatch.setenv("LLM_EMBEDDING_MODEL", "embed-unit")
     repository, store, owner = _upload_world(tmp_path)
@@ -209,6 +271,73 @@ def test_embed_failure_marks_document_failed(tmp_path, monkeypatch):
     chunks = repository.list_knowledge_chunks(owner)
     assert [chunk.text for chunk in chunks] == ["通分。"]
     assert chunks[0].embedding is None
+
+
+def test_cleared_model_on_empty_embed_leaves_the_row_pending(tmp_path, monkeypatch):
+    monkeypatch.setenv("LLM_EMBEDDING_MODEL", "embed-unit")
+    repository = SqliteRepository(tmp_path / "knowledge.db")
+    owner = uuid4().hex
+    jobs: list = []
+
+    def embedder(texts):
+        monkeypatch.setenv("LLM_EMBEDDING_MODEL", "   ")
+        return None
+
+    document = create_paste(repository, owner, "笔记", "通分。", embedder, jobs.append)
+    jobs[0]()
+
+    saved = repository.get_knowledge_document(document.id, owner)
+    assert saved is not None
+    assert saved.status == "pending"
+    assert saved.message == ""
+    chunks = repository.list_knowledge_chunks(owner)
+    assert chunks[0].embedding is None
+    assert chunks[0].embedding_model == ""
+
+
+def test_successful_embed_stays_under_the_pinned_model_name(tmp_path, monkeypatch):
+    monkeypatch.setenv("LLM_EMBEDDING_MODEL", "embed-unit")
+    repository = SqliteRepository(tmp_path / "knowledge.db")
+    owner = uuid4().hex
+    jobs: list = []
+
+    def embedder(texts):
+        monkeypatch.setenv("LLM_EMBEDDING_MODEL", "embed-next")
+        return [[1.0, 0.0] for _ in texts]
+
+    document = create_paste(repository, owner, "笔记", "通分。", embedder, jobs.append)
+    jobs[0]()
+
+    saved = repository.get_knowledge_document(document.id, owner)
+    chunks = repository.list_knowledge_chunks(owner)
+    assert saved is not None
+    assert saved.status == "ready"
+    assert chunks[0].embedding_model == "embed-unit"
+    assert chunks[0].embedding == pack_vector([1.0, 0.0])
+    assert display_document(saved, chunks, "embed-next") == ("pending", MODEL_CHANGED_MESSAGE)
+
+
+def test_successful_embed_is_saved_when_the_model_name_is_cleared(tmp_path, monkeypatch):
+    monkeypatch.setenv("LLM_EMBEDDING_MODEL", "embed-unit")
+    repository = SqliteRepository(tmp_path / "knowledge.db")
+    owner = uuid4().hex
+    jobs: list = []
+
+    def embedder(texts):
+        monkeypatch.delenv("LLM_EMBEDDING_MODEL", raising=False)
+        return [[1.0, 0.0] for _ in texts]
+
+    document = create_paste(repository, owner, "笔记", "通分。", embedder, jobs.append)
+    jobs[0]()
+
+    saved = repository.get_knowledge_document(document.id, owner)
+    chunks = repository.list_knowledge_chunks(owner)
+    assert saved is not None
+    assert saved.status == "ready"
+    assert saved.message == ""
+    assert chunks[0].embedding_model == "embed-unit"
+    assert chunks[0].embedding == pack_vector([1.0, 0.0])
+    assert display_document(saved, chunks, "") == ("pending", MODEL_UNSET_MESSAGE)
 
 
 def test_embed_document_returns_when_already_running(tmp_path, monkeypatch):
@@ -384,6 +513,80 @@ def test_default_schedule_runs_embed_on_a_daemon_thread(tmp_path, monkeypatch):
 
     schedule_background(work)
     assert done.wait(2)
+
+
+def _fill_failed_documents(repository, owner: str, count: int) -> None:
+    for index in range(count):
+        repository.insert_knowledge_document(
+            owner,
+            f"失败{index}",
+            "upload",
+            "blank.pdf",
+            ".pdf",
+            status="failed",
+            message=EMPTY_EXTRACT_MESSAGE,
+        )
+
+
+def _assert_one_create_takes_the_last_slot(repository, owner: str, create) -> None:
+    """Stall the first capacity read so a second create can pass a check made outside the insert transaction."""
+    started = threading.Event()
+    release = threading.Event()
+    gate = threading.Lock()
+    state = {"stall": True}
+    original = repository.count_knowledge_documents
+    successes: list = []
+    errors: list = []
+    unexpected: list = []
+
+    def counting(owner_id):
+        total = original(owner_id)
+        stall_now = False
+        with gate:
+            if state["stall"]:
+                state["stall"] = False
+                stall_now = True
+        if stall_now:
+            started.set()
+            release.wait(3)
+        return total
+
+    def run(label):
+        try:
+            successes.append(create(label))
+        except RequestError as exc:
+            errors.append(exc.public_message)
+        except Exception as exc:
+            unexpected.append(exc)
+
+    repository.count_knowledge_documents = counting
+    first = threading.Thread(target=run, args=("甲",))
+    second = threading.Thread(target=run, args=("乙",))
+    try:
+        first.start()
+        assert started.wait(3)
+        lock_free = repository._lock.acquire(blocking=False)
+        if lock_free:
+            repository._lock.release()
+        second.start()
+        if lock_free:
+            second.join(3)
+            release.set()
+            first.join(3)
+        else:
+            release.set()
+            first.join(3)
+            second.join(3)
+    finally:
+        release.set()
+        repository.count_knowledge_documents = original
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert unexpected == []
+    assert len(successes) == 1
+    assert errors == [COUNT_MESSAGE]
+    assert original(owner) == 50
 
 
 def _vectors(texts):
