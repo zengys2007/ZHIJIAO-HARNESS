@@ -523,6 +523,9 @@ function ApiConfig({
                 </button>
               </div>
             ))}
+            {kind === "local" ? (
+              <p className="provider-field-hint">嵌入模型 {environment?.embedding_model ?? ""}</p>
+            ) : null}
             <button
               type="button"
               className="provider-add-model"

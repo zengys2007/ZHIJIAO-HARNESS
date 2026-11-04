@@ -245,3 +245,35 @@ export type TeachingApi = {
     content: string,
   ): Promise<{ document_id: string }>;
 };
+
+// ===== 知识库 =====
+
+export type KnowledgeSource = "paste" | "upload";
+
+export type KnowledgeStatus = "pending" | "ready" | "failed";
+
+export type KnowledgeDocument = {
+  document_id: string;
+  title: string;
+  source: KnowledgeSource;
+  filename: string;
+  extension: string;
+  status: KnowledgeStatus;
+  message: string;
+  created_at: string;
+};
+
+export type KnowledgeList = {
+  embedding_model: string;
+  documents: KnowledgeDocument[];
+};
+
+/** 知识库 API。测试可注入桩实现，页面不直接调用嵌入服务。 */
+export type KnowledgeApi = {
+  listDocuments(): Promise<KnowledgeList>;
+  createPaste(title: string, content: string): Promise<KnowledgeDocument>;
+  createUpload(file: File, title?: string): Promise<KnowledgeDocument>;
+  deleteDocument(documentId: string): Promise<void>;
+  embedDocument(documentId: string): Promise<KnowledgeDocument>;
+  saveEmbeddingModel(model: string): Promise<{ embedding_model: string }>;
+};

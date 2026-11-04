@@ -12,6 +12,7 @@ import {
   probeLlm,
   register as httpRegister,
   resume as httpResume,
+  knowledgeApi as httpKnowledgeApi,
   loadLlmSources,
   type LlmSources,
   type ProbeRequest,
@@ -31,7 +32,7 @@ import {
 import type { SessionSummary } from "../lib/sessions";
 import { followTask } from "../lib/stream";
 import { conversationTitle } from "../lib/text";
-import type { ApprovalMode, AuthResult, AuthUser, ContextUsageInfo, ConversationApi, ConversationMessage, PlanStatus, TaskSnapshot } from "../types/api";
+import type { ApprovalMode, AuthResult, AuthUser, ContextUsageInfo, ConversationApi, ConversationMessage, KnowledgeApi, PlanStatus, TaskSnapshot } from "../types/api";
 import type { GoalsApi } from "../types/goals";
 
 type ConversationMode = {
@@ -55,6 +56,7 @@ import { GoalsView } from "./GoalsView";
 import { ModelPicker, type LlmSourceId } from "../components/ModelPicker";
 import { ContextUsage } from "../components/ContextUsage";
 import { PlusMenu } from "../components/PlusMenu";
+import { KnowledgePanel } from "../components/KnowledgePanel";
 import { Settings, type SettingsSection } from "../components/Settings";
 import { Sidebar } from "../components/Sidebar";
 import { TeachingPanel } from "../components/TeachingPanel";
@@ -82,6 +84,8 @@ type Props = {
   logoutFn?: () => Promise<void>;
   /** 测试注入：目标管理 API。默认走后端 */
   goalsApi?: GoalsApi;
+  /** 测试注入：知识库 API。默认走后端 */
+  knowledgeApi?: KnowledgeApi;
 };
 
 function readSession(value: AuthUser | AuthResult): AuthResult {
@@ -118,6 +122,7 @@ function WorkbenchScreen({
   resumeFn = httpResume,
   logoutFn = httpLogout,
   goalsApi = defaultGoalsApi,
+  knowledgeApi = httpKnowledgeApi,
 }: Props) {
   const { t } = useAppearance();
   // ===== Auth 状态 =====
@@ -142,7 +147,7 @@ function WorkbenchScreen({
   const [submitting, setSubmitting] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
   const [preview, setPreview] = useState(false);
-  const [view, setView] = useState<"chat" | "settings" | "goals" | "teaching">("chat");
+  const [view, setView] = useState<"chat" | "settings" | "goals" | "teaching" | "knowledge">("chat");
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("user");
   /** 审批模式：手动 / 自动 */
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>("manual");
@@ -936,6 +941,8 @@ function WorkbenchScreen({
         onSettingsSection={setSettingsSection}
         teachingOpen={view === "teaching"}
         onOpenTeaching={() => setView("teaching")}
+        knowledgeOpen={view === "knowledge"}
+        onOpenKnowledge={() => setView("knowledge")}
         onNew={handleNew}
         onSelect={handleSelect}
         onPin={handlePin}
@@ -974,6 +981,14 @@ function WorkbenchScreen({
             <AuthForm onLogin={doLogin} onRegister={doRegister} />
           ) : (
             <TeachingPanel onDraft={handleTeachingDraft} />
+          )
+        ) : view === "knowledge" ? (
+          user === undefined ? (
+            <AuthLoading />
+          ) : user === null ? (
+            <AuthForm onLogin={doLogin} onRegister={doRegister} />
+          ) : (
+            <KnowledgePanel api={knowledgeApi} />
           )
         ) : user === undefined ? (
           <AuthLoading />

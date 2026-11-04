@@ -15,6 +15,9 @@ type SidebarProps = {
   /** 备课与学情视图是否打开 */
   teachingOpen: boolean;
   onOpenTeaching: () => void;
+  /** 知识库视图是否打开 */
+  knowledgeOpen: boolean;
+  onOpenKnowledge: () => void;
   onNew: () => void;
   onSelect: (id: string) => void;
   onPin: (id: string, pinned: boolean) => Promise<void>;
@@ -39,6 +42,8 @@ export function Sidebar({
   onSettingsSection,
   teachingOpen,
   onOpenTeaching,
+  knowledgeOpen,
+  onOpenKnowledge,
   onNew,
   onSelect,
   onPin,
@@ -86,6 +91,8 @@ export function Sidebar({
           loggedIn={loggedIn}
           teachingOpen={teachingOpen}
           onOpenTeaching={onOpenTeaching}
+          knowledgeOpen={knowledgeOpen}
+          onOpenKnowledge={onOpenKnowledge}
         onNew={onNew}
         onSelect={onSelect}
         onPin={onPin}
@@ -170,6 +177,8 @@ function ChatNav({
   loggedIn,
   teachingOpen,
   onOpenTeaching,
+  knowledgeOpen,
+  onOpenKnowledge,
   onNew,
   onSelect,
   onPin,
@@ -182,6 +191,8 @@ function ChatNav({
   loggedIn: boolean;
   teachingOpen: boolean;
   onOpenTeaching: () => void;
+  knowledgeOpen: boolean;
+  onOpenKnowledge: () => void;
   onNew: () => void;
   onSelect: (id: string) => void;
   onPin: (id: string, pinned: boolean) => Promise<void>;
@@ -258,6 +269,15 @@ function ChatNav({
         disabled={busy || !loggedIn}
       >
         备课与学情
+      </button>
+      <button
+        className="new-chat side-teaching"
+        type="button"
+        aria-current={knowledgeOpen ? "page" : undefined}
+        onClick={onOpenKnowledge}
+        disabled={busy || !loggedIn}
+      >
+        知识库
       </button>
       {!loggedIn && !preview ? (
         <p className="preview-note">{t("signInFirst")}</p>

@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
-import type { AuthUser, ConversationApi, ConversationMessage, PlanStatus, StreamEvent, TaskSnapshot } from "../types/api";
+import type { AuthUser, ConversationApi, ConversationMessage, KnowledgeApi, PlanStatus, StreamEvent, TaskSnapshot } from "../types/api";
 import type { GoalsApi } from "../types/goals";
 import { ApiRequestError, DisconnectError, type ProbeRequest } from "../api/http";
 import { Workbench } from "./Workbench";
@@ -25,6 +25,7 @@ afterEach(() => {
 function renderLoggedIn(opts: {
   api?: ConversationApi;
   goalsApi?: GoalsApi;
+  knowledgeApi?: KnowledgeApi;
   loadSources?: () => Promise<{ environment: { base_url: string; model: string; has_api_key: boolean }; dotenv: { base_url: string; model: string; has_api_key: boolean } }>;
   probe?: (body: ProbeRequest, signal?: AbortSignal) => Promise<{ reachable: boolean }>;
   logout?: () => Promise<void>;
@@ -34,6 +35,7 @@ function renderLoggedIn(opts: {
     <Workbench
       api={opts.api ?? immediateApi()}
       goalsApi={opts.goalsApi}
+      knowledgeApi={opts.knowledgeApi}
       loadSources={opts.loadSources}
       probe={opts.probe}
       getCurrentUser={noopUser}
@@ -986,6 +988,44 @@ describe("工作台", () => {
     expect(await screen.findByRole("region", { name: "目标管理" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "返回对话" }));
     expect(screen.queryByRole("region", { name: "目标管理" })).toBeNull();
+  });
+
+  it("已登录时知识库按钮在备课与学情之后，点击后看见知识库", async () => {
+    const user = userEvent.setup();
+    let listed = 0;
+    const knowledgeApi: KnowledgeApi = {
+      listDocuments: async () => {
+        listed += 1;
+        return { embedding_model: "embed-model", documents: [] };
+      },
+      createPaste: async () => {
+        throw new Error("不应调用");
+      },
+      createUpload: async () => {
+        throw new Error("不应调用");
+      },
+      deleteDocument: async () => {
+        throw new Error("不应调用");
+      },
+      embedDocument: async () => {
+        throw new Error("不应调用");
+      },
+      saveEmbeddingModel: async () => ({ embedding_model: "embed-model" }),
+    };
+    renderLoggedIn({ knowledgeApi });
+    await screen.findByRole("button", { name: "发送" });
+
+    const teaching = screen.getByRole("button", { name: "备课与学情" });
+    const knowledge = screen.getByRole("button", { name: "知识库" });
+    expect(teaching.nextElementSibling).toBe(knowledge);
+    expect(knowledge.classList.contains("new-chat")).toBe(true);
+    expect(knowledge.classList.contains("side-teaching")).toBe(true);
+
+    await user.click(knowledge);
+    expect(await screen.findByRole("heading", { name: "知识库" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "备课与学情" })).toBeNull();
+    expect(screen.getByRole("button", { name: "知识库" }).getAttribute("aria-current")).toBe("page");
+    await waitFor(() => expect(listed).toBe(1));
   });
 });
 

@@ -11,6 +11,10 @@ import type {
   StreamEvent,
   TaskSnapshot,
   TaskStatus,
+  KnowledgeApi,
+  KnowledgeDocument,
+  KnowledgeSource,
+  KnowledgeStatus,
   TeachingApi,
   TeachingInsights,
   TeachingOverview,
@@ -111,6 +115,8 @@ export type LlmPublic = {
   base_url: string;
   model: string;
   has_api_key: boolean;
+  /** 旧响应省略时解析为空字符串。 */
+  embedding_model?: string;
 };
 
 export type LlmSources = {
@@ -122,7 +128,7 @@ export type ProbeRequest =
   | { source: "local" }
   | { source: "dotenv"; base_url?: string; model?: string; api_key?: string };
 
-const EMPTY_LLM: LlmPublic = { base_url: "", model: "", has_api_key: false };
+const EMPTY_LLM: LlmPublic = { base_url: "", model: "", has_api_key: false, embedding_model: "" };
 
 export async function loadLlmSources(signal?: AbortSignal): Promise<LlmSources> {
   const payload = await request("/api/llm/config", { signal });
@@ -148,11 +154,17 @@ export async function probeLlm(body: ProbeRequest, signal?: AbortSignal): Promis
 
 function readPublicLlm(value: unknown): LlmPublic {
   if (!value || typeof value !== "object") return EMPTY_LLM;
-  const record = value as { base_url?: unknown; model?: unknown; has_api_key?: unknown };
+  const record = value as {
+    base_url?: unknown;
+    model?: unknown;
+    has_api_key?: unknown;
+    embedding_model?: unknown;
+  };
   return {
     base_url: typeof record.base_url === "string" ? record.base_url : "",
     model: typeof record.model === "string" ? record.model : "",
     has_api_key: record.has_api_key === true,
+    embedding_model: typeof record.embedding_model === "string" ? record.embedding_model : "",
   };
 }
 
@@ -164,7 +176,7 @@ export async function request(path: string, init?: RequestInit): Promise<unknown
       credentials: "include",
       headers: {
         Accept: "application/json",
-        ...(init?.body ? { "Content-Type": "application/json; charset=utf-8" } : {}),
+        ...(init?.body && !isFormData(init.body) ? { "Content-Type": "application/json; charset=utf-8" } : {}),
         ...(init?.headers ?? {}),
       },
     });
@@ -312,6 +324,106 @@ export const teachingApi: TeachingApi = {
     return { document_id: readId(body, "document_id") };
   },
 };
+
+export const knowledgeApi: KnowledgeApi = {
+  listDocuments: async () => readKnowledgeList(await request("/api/knowledge/documents")),
+  createPaste: async (title, content) =>
+    readKnowledgeDocument(
+      await request("/api/knowledge/documents", {
+        method: "POST",
+        body: JSON.stringify({ title, content }),
+      }),
+    ),
+  createUpload: async (file, title) => {
+    const form = new FormData();
+    form.append("file", file);
+    if (title !== undefined) form.append("title", title);
+    return readKnowledgeDocument(
+      await request("/api/knowledge/documents", {
+        method: "POST",
+        body: form,
+      }),
+    );
+  },
+  deleteDocument: async (documentId) => {
+    await request(`/api/knowledge/documents/${documentId}`, { method: "DELETE" });
+  },
+  embedDocument: async (documentId) =>
+    readKnowledgeDocument(
+      await request(`/api/knowledge/documents/${documentId}/embed`, { method: "POST" }),
+    ),
+  saveEmbeddingModel: async (model) =>
+    readEmbeddingModel(
+      await request("/api/knowledge/embedding-model", {
+        method: "PUT",
+        body: JSON.stringify({ model }),
+      }),
+    ),
+};
+
+function readKnowledgeList(body: unknown): { embedding_model: string; documents: KnowledgeDocument[] } {
+  if (!body || typeof body !== "object") invalidKnowledge();
+  const record = body as Record<string, unknown>;
+  if (typeof record.embedding_model !== "string" || !Array.isArray(record.documents)) invalidKnowledge();
+  return {
+    embedding_model: record.embedding_model,
+    documents: record.documents.map(readKnowledgeDocument),
+  };
+}
+
+function readKnowledgeDocument(value: unknown): KnowledgeDocument {
+  if (!value || typeof value !== "object") invalidKnowledge();
+  const record = value as Record<string, unknown>;
+  const source = record.source;
+  const status = record.status;
+  const documentId = record.document_id;
+  if (
+    typeof documentId !== "string" ||
+    !ID.test(documentId) ||
+    typeof record.title !== "string" ||
+    !isKnowledgeSource(source) ||
+    typeof record.filename !== "string" ||
+    typeof record.extension !== "string" ||
+    !isKnowledgeStatus(status) ||
+    typeof record.message !== "string" ||
+    typeof record.created_at !== "string"
+  ) {
+    invalidKnowledge();
+  }
+  return {
+    document_id: documentId,
+    title: record.title,
+    source,
+    filename: record.filename,
+    extension: record.extension,
+    status,
+    message: record.message,
+    created_at: record.created_at,
+  };
+}
+
+function readEmbeddingModel(body: unknown): { embedding_model: string } {
+  if (!body || typeof body !== "object") invalidKnowledge();
+  const model = (body as Record<string, unknown>).embedding_model;
+  if (typeof model !== "string") invalidKnowledge();
+  return { embedding_model: model };
+}
+
+function invalidKnowledge(): never {
+  throw new ApiRequestError("invalid_response", "系统出错了，可以再发一次。", true, 200);
+}
+
+function isKnowledgeSource(value: unknown): value is KnowledgeSource {
+  return value === "paste" || value === "upload";
+}
+
+function isKnowledgeStatus(value: unknown): value is KnowledgeStatus {
+  return value === "pending" || value === "ready" || value === "failed";
+}
+
+function isFormData(body: BodyInit): boolean {
+  return typeof FormData !== "undefined" && body instanceof FormData;
+}
 
 function readOverview(body: unknown): TeachingOverview {
   const record = recordOf(body);
