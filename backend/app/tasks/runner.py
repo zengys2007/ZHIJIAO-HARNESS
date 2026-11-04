@@ -16,6 +16,7 @@ from app.context.assemble import context_messages
 from app.context.ask import ask_message, ask_tokens
 from app.context.plan import plan_message, plan_tokens
 from app.graph.build import invoke_graph
+from app.knowledge.retrieve import build_knowledge_message
 from app.llm.hub import hub
 from app.llm.protocol import AssistantMessage
 from app.llm.usage import DEFAULT_LIMIT, DEFAULT_OUTPUT_LIMIT, count_messages_locally
@@ -52,9 +53,10 @@ def run_turn(repo: Repository, store: FileStore, graph, task_id: str, turn_conte
     hub.open(task_id)
     repo.append_event(task_id, "user_message", {"content": task.raw_request})
     digest = _teaching_digest(repo, task.conversation_id, turn_context)
+    knowledge = _knowledge_digest(repo, task, turn_context, digest)
     ask_mode, plan_status, plan_body = _ask_and_plan(repo, task.conversation_id)
     prior, summary, model_user = _prepare_prior(
-        repo, task, digest, turn_context, ask_mode, plan_status, plan_body
+        repo, task, digest, turn_context, ask_mode, plan_status, plan_body, knowledge
     )
     state = {
         "messages": [],
@@ -66,6 +68,7 @@ def run_turn(repo: Repository, store: FileStore, graph, task_id: str, turn_conte
         "task_id": task_id,
         "store": store,
         "context_digest": digest,
+        "knowledge_digest": knowledge,
         "context_summary": summary,
         "context_ask": ask_message(ask_mode),
         "context_plan": plan_message(plan_status, plan_body),
@@ -200,6 +203,7 @@ def _prepare_prior(
     ask_mode: bool = False,
     plan_status: str = "off",
     plan_body: str = "",
+    knowledge: str = "",
 ):
     if not task.conversation_id:
         return [], "", task.raw_request
@@ -210,6 +214,8 @@ def _prepare_prior(
     prefix = [{"role": "system", "content": turn_context.system}]
     if digest:
         prefix.append({"role": "system", "content": digest})
+    if knowledge:
+        prefix.append({"role": "system", "content": knowledge})
     prepared = prepare_context(
         records,
         summary,
@@ -262,6 +268,47 @@ def make_summarizer(complete):
         return None
 
     return summarize
+
+
+def _knowledge_digest(repo: Repository, task, turn_context: TurnContext | None, digest: str) -> str:
+    if not task.conversation_id:
+        return ""
+    owner_id = repo.get_conversation_owner(task.conversation_id)
+    if not owner_id:
+        return ""
+    counter = count_messages_locally if turn_context is None else turn_context.count_tokens
+    if turn_context is None:
+        budget = DEFAULT_LIMIT
+    else:
+        budget = max(turn_context.limit_tokens - turn_context.output_reserve - turn_context.extra_tokens, 1)
+    if digest:
+        budget -= counter([{"role": "system", "content": digest}])
+    if budget < 1:
+        return ""
+    return build_knowledge_message(
+        repo,
+        owner_id,
+        task.raw_request,
+        token_budget=budget,
+        count_tokens=counter,
+        embedder=_embed_question,
+    )
+
+
+def _embed_question(question: str):
+    from pathlib import Path
+
+    from app.config import Settings, load_settings
+    from app.knowledge.embed import embed_texts
+
+    try:
+        settings = load_settings()
+    except Exception:
+        settings = Settings(data_dir=Path("data"))
+    try:
+        return embed_texts(settings, [question])
+    except Exception:
+        return None
 
 
 def _teaching_digest(repo: Repository, conversation_id: str | None, turn_context: TurnContext | None = None) -> str:

@@ -14,10 +14,13 @@ def assemble_model_input(
     context_summary: str = "",
     context_ask: str = "",
     context_plan: str = "",
+    knowledge_digest: str = "",
 ) -> list[dict]:
     prefix = [{"role": "system", "content": system}]
     if context_digest:
         prefix.append({"role": "system", "content": context_digest})
+    if knowledge_digest:
+        prefix.append({"role": "system", "content": knowledge_digest})
     return context_messages(
         prefix,
         context_summary,

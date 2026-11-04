@@ -18,6 +18,7 @@ def make_model_node(registry, complete, system: str):
                 state.get("context_summary") or "",
                 state.get("context_ask") or "",
                 state.get("context_plan") or "",
+                state.get("knowledge_digest") or "",
             ),
             tools or None,
             hub.sink(state.get("task_id") or ""),
