@@ -19,6 +19,16 @@ from app.api.auth import (
     parse_resume,
 )
 from app.api.errors import error_payload
+from app.api.knowledge import (
+    ENV_FILE_MESSAGE,
+    NO_CHUNKS_MESSAGE,
+    NOT_FOUND_MESSAGE,
+    UploadReader,
+    document_payload,
+    parse_embedding_model,
+    parse_paste,
+    valid_document_id,
+)
 from app.api.goals import (
     GoalRequestError,
     node_view,
@@ -57,10 +67,28 @@ from app.auth.sessions import (
     session_expiry,
     sign_cookie,
 )
-from app.config import Settings, dotenv_llm, load_env_file, load_settings, process_llm
+from app.config import (
+    Settings,
+    default_env_path,
+    dotenv_llm,
+    embedding_model_name,
+    load_env_file,
+    load_settings,
+    process_llm,
+    read_dotenv_values,
+    write_embedding_model,
+)
 from app.context.prompt import load_system_prompt
 from app.goals.templates import semester_seed
 from app.graph.build import build_graph
+from app.knowledge.embed import embed_texts
+from app.knowledge.service import (
+    create_paste,
+    create_upload,
+    display_document,
+    embed_document,
+    schedule_background,
+)
 from app.llm.complete import make_complete
 from app.llm.hub import encode_sse, hub
 from app.llm.probe import probe_chat
@@ -122,7 +150,7 @@ def _model_limits(settings: Settings) -> tuple[int, str, int]:
     return context, source, output
 
 
-def create_app(settings: Settings | None = None, complete=None, probe=None, env_file=None) -> FastAPI:
+def create_app(settings: Settings | None = None, complete=None, probe=None, env_file=None, schedule=None) -> FastAPI:
     settings = settings or load_settings()
     auth_secret = settings.auth_secret.strip()
     if len(auth_secret) < 16:
@@ -155,7 +183,8 @@ def create_app(settings: Settings | None = None, complete=None, probe=None, env_
     app.state.repository = repository
     app.state.files = store
     app.state.settings = settings
-    app.state.env_file = env_file
+    app.state.env_file = default_env_path() if env_file is None else env_file
+    background = schedule_background if schedule is None else schedule
     app.state.turn_context = turn_context
     workbench = Path(__file__).resolve().parents[2] / "frontend" / "index.html"
 
@@ -546,7 +575,9 @@ def create_app(settings: Settings | None = None, complete=None, probe=None, env_
         if denied is not None:
             return denied
         environment = process_llm()
+        environment["embedding_model"] = embedding_model_name()
         dotenv = dotenv_llm(app.state.env_file)
+        dotenv["embedding_model"] = read_dotenv_values(app.state.env_file).get("LLM_EMBEDDING_MODEL", "").strip()
         return {
             "environment": _public_llm(environment),
             "dotenv": _public_llm(dotenv),
@@ -821,6 +852,121 @@ def create_app(settings: Settings | None = None, complete=None, probe=None, env_
         document_id = repository.create_document(user.id, doc_type, title, content)
         return JSONResponse({"document_id": document_id}, status_code=201)
 
+    @app.get("/api/knowledge/documents")
+    def list_knowledge_documents(request: Request):
+        user, denied = require_user(request)
+        if denied is not None:
+            return denied
+        model = embedding_model_name()
+        chunks = repository.list_knowledge_chunks(user.id)
+        documents = []
+        for document in repository.list_knowledge_documents(user.id):
+            status, message = display_document(document, chunks, model)
+            documents.append(document_payload(document, status, message))
+        return {"embedding_model": model, "documents": documents}
+
+    @app.post("/api/knowledge/documents")
+    async def create_knowledge_document(request: Request):
+        user, denied = require_user(request)
+        if denied is not None:
+            return denied
+        try:
+            media = request.headers.get("content-type", "")
+            if media.lower().startswith("multipart/form-data"):
+                reader = UploadReader(media)
+                async for chunk in request.stream():
+                    reader.feed(chunk)
+                    if reader.halt:
+                        break
+                filename, data, title = reader.finish()
+                document = create_upload(
+                    repository,
+                    store,
+                    user.id,
+                    filename,
+                    data,
+                    title,
+                    embed_texts,
+                    background,
+                )
+            else:
+                body = json.loads(await request.body() or b"null")
+                title, content = parse_paste(body)
+                document = create_paste(
+                    repository,
+                    user.id,
+                    title,
+                    content,
+                    embed_texts,
+                    background,
+                )
+        except json.JSONDecodeError:
+            return JSONResponse(error_payload("invalid_input"), status_code=400)
+        except RequestError as exc:
+            return JSONResponse(error_payload("invalid_input", exc.public_message), status_code=400)
+        status, message = display_document(
+            document,
+            repository.list_knowledge_chunks(user.id),
+            embedding_model_name(),
+        )
+        return JSONResponse(document_payload(document, status, message), status_code=201)
+
+    @app.delete("/api/knowledge/documents/{document_id}")
+    def delete_knowledge_document(document_id: str, request: Request):
+        user, denied = require_user(request)
+        if denied is not None:
+            return denied
+        if not valid_document_id(document_id):
+            return JSONResponse(error_payload("not_found", NOT_FOUND_MESSAGE), status_code=404)
+        if not repository.delete_knowledge_document(document_id, user.id):
+            return JSONResponse(error_payload("not_found", NOT_FOUND_MESSAGE), status_code=404)
+        store.remove_knowledge(user.id, document_id)
+        return Response(status_code=204)
+
+    @app.post("/api/knowledge/documents/{document_id}/embed")
+    def embed_knowledge_document(document_id: str, request: Request):
+        user, denied = require_user(request)
+        if denied is not None:
+            return denied
+        if not valid_document_id(document_id):
+            return JSONResponse(error_payload("not_found", NOT_FOUND_MESSAGE), status_code=404)
+        document = repository.get_knowledge_document(document_id, user.id)
+        if document is None:
+            return JSONResponse(error_payload("not_found", NOT_FOUND_MESSAGE), status_code=404)
+        chunks = [
+            chunk
+            for chunk in repository.list_knowledge_chunks(user.id)
+            if chunk.document_id == document_id
+        ]
+        if not chunks:
+            return JSONResponse(error_payload("invalid_input", NO_CHUNKS_MESSAGE), status_code=400)
+        repository.set_knowledge_status(document_id, user.id, "pending", "")
+        updated = repository.get_knowledge_document(document_id, user.id)
+        if updated is None:
+            return JSONResponse(error_payload("not_found", NOT_FOUND_MESSAGE), status_code=404)
+        status, message = display_document(updated, chunks, embedding_model_name())
+        payload = document_payload(updated, status, message)
+        background(lambda: embed_document(repository, document_id, user.id, embed_texts))
+        return JSONResponse(payload, status_code=202)
+
+    @app.put("/api/knowledge/embedding-model")
+    async def update_embedding_model(request: Request):
+        user, denied = require_user(request)
+        if denied is not None:
+            return denied
+        try:
+            body = json.loads(await request.body() or b"null")
+            model = parse_embedding_model(body)
+        except json.JSONDecodeError:
+            return JSONResponse(error_payload("invalid_input"), status_code=400)
+        except RequestError as exc:
+            return JSONResponse(error_payload("invalid_input", exc.public_message), status_code=400)
+        try:
+            write_embedding_model(model, app.state.env_file)
+        except FileNotFoundError:
+            return JSONResponse(error_payload("invalid_input", ENV_FILE_MESSAGE), status_code=400)
+        return {"embedding_model": model}
+
     def preview(artifact_id: str, version: int, relative_path: str = ""):
         result = load_preview(store, artifact_id, version, relative_path)
         if result.status != 200:
@@ -868,6 +1014,7 @@ def _public_llm(values: dict[str, str]) -> dict:
         "base_url": values["base_url"],
         "model": values["model"],
         "has_api_key": bool(values["api_key"]),
+        "embedding_model": values.get("embedding_model", ""),
     }
 
 

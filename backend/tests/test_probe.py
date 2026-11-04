@@ -67,12 +67,23 @@ def test_llm_config_hides_keys(monkeypatch, tmp_path):
     monkeypatch.setenv("LLM_BASE_URL", "http://env.test/v1")
     monkeypatch.setenv("LLM_API_KEY", "env-key")
     monkeypatch.setenv("LLM_MODEL", "env-model")
+    monkeypatch.delenv("LLM_EMBEDDING_MODEL", raising=False)
     client = TestClient(create_app(Settings(data_dir=tmp_path, auth_secret="test-secret-value"), complete=_ok, probe=lambda *args: True, env_file=env_file))
     _register(client)
     body = client.get("/api/llm/config").json()
     assert body == {
-        "environment": {"base_url": "http://env.test/v1", "model": "env-model", "has_api_key": True},
-        "dotenv": {"base_url": "http://file.test/v1", "model": "file-model", "has_api_key": True},
+        "environment": {
+            "base_url": "http://env.test/v1",
+            "model": "env-model",
+            "has_api_key": True,
+            "embedding_model": "",
+        },
+        "dotenv": {
+            "base_url": "http://file.test/v1",
+            "model": "file-model",
+            "has_api_key": True,
+            "embedding_model": "",
+        },
     }
     assert "env-key" not in client.get("/api/llm/config").text
     assert "file-key" not in client.get("/api/llm/config").text
@@ -84,7 +95,7 @@ def test_local_probe_ignores_values_copied_from_the_dotenv_file(monkeypatch, tmp
         "LLM_BASE_URL=http://file.test/v1\nLLM_API_KEY=file-key\nLLM_MODEL=file-model\n",
         encoding="utf-8",
     )
-    for name in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"):
+    for name in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "LLM_EMBEDDING_MODEL"):
         monkeypatch.delenv(name, raising=False)
     from app.config import load_env_file
 
@@ -102,7 +113,12 @@ def test_local_probe_ignores_values_copied_from_the_dotenv_file(monkeypatch, tmp
     config = client.get("/api/llm/config").json()
     assert response.json() == {"reachable": False}
     assert called is False
-    assert config["environment"] == {"base_url": "", "model": "", "has_api_key": False}
+    assert config["environment"] == {
+        "base_url": "",
+        "model": "",
+        "has_api_key": False,
+        "embedding_model": "",
+    }
     assert config["dotenv"]["has_api_key"] is True
 
 
