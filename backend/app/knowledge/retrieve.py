@@ -25,6 +25,8 @@ def build_knowledge_message(
     candidates = _candidates(repo, owner_id, model)
     if not candidates:
         return ""
+    if not _room_for_title(candidates, token_budget, count_tokens):
+        return ""
     query = _query_vector(embedder, question)
     if query is None:
         return ""
@@ -73,8 +75,6 @@ def _rank(candidates, query: list[float]) -> list[tuple]:
         if vector is None:
             continue
         score = cosine(query, vector)
-        if score <= 0:
-            continue
         scored.append((score, document.created_at, chunk.ordinal, document.title, chunk.text))
     scored.sort(key=lambda item: (-item[0], item[1], item[2]))
     return scored
@@ -90,6 +90,11 @@ def _vector(chunk, width: int) -> list[float] | None:
     return values
 
 
+def _room_for_title(candidates, token_budget: int, count_tokens) -> bool:
+    lowest = min(_tokens(f"资料《{document.title}》：", count_tokens) for document, _chunk in candidates)
+    return token_budget >= lowest + _MIN_BODY
+
+
 def _fit(ranked, token_budget: int, count_tokens) -> str:
     excerpts: list[str] = []
     for _score, _created_at, _ordinal, title, text in ranked:
@@ -97,13 +102,17 @@ def _fit(ranked, token_budget: int, count_tokens) -> str:
         if token_budget < _tokens(title_line, count_tokens) + _MIN_BODY:
             break
         excerpt = title_line + "\n" + text
-        candidate = "\n".join([HEADER, *excerpts, excerpt])
+        candidate = _message([*excerpts, excerpt])
         if _tokens(candidate, count_tokens) > token_budget:
             break
         excerpts.append(excerpt)
     if not excerpts:
         return ""
-    return "\n".join([HEADER, *excerpts])
+    return _message(excerpts)
+
+
+def _message(excerpts: list[str]) -> str:
+    return HEADER + "\n" + "\n\n".join(excerpts)
 
 
 def _tokens(text: str, count_tokens) -> int:

@@ -53,8 +53,8 @@ def run_turn(repo: Repository, store: FileStore, graph, task_id: str, turn_conte
     hub.open(task_id)
     repo.append_event(task_id, "user_message", {"content": task.raw_request})
     digest = _teaching_digest(repo, task.conversation_id, turn_context)
-    knowledge = _knowledge_digest(repo, task, turn_context, digest)
     ask_mode, plan_status, plan_body = _ask_and_plan(repo, task.conversation_id)
+    knowledge = _knowledge_digest(repo, task, turn_context, digest, ask_mode, plan_status, plan_body)
     prior, summary, model_user = _prepare_prior(
         repo, task, digest, turn_context, ask_mode, plan_status, plan_body, knowledge
     )
@@ -270,21 +270,22 @@ def make_summarizer(complete):
     return summarize
 
 
-def _knowledge_digest(repo: Repository, task, turn_context: TurnContext | None, digest: str) -> str:
+def _knowledge_digest(
+    repo: Repository,
+    task,
+    turn_context: TurnContext | None,
+    digest: str,
+    ask_mode: bool = False,
+    plan_status: str = "off",
+    plan_body: str = "",
+) -> str:
     if not task.conversation_id:
         return ""
     owner_id = repo.get_conversation_owner(task.conversation_id)
     if not owner_id:
         return ""
     counter = count_messages_locally if turn_context is None else turn_context.count_tokens
-    if turn_context is None:
-        budget = DEFAULT_LIMIT
-    else:
-        budget = max(turn_context.limit_tokens - turn_context.output_reserve - turn_context.extra_tokens, 1)
-    if digest:
-        budget -= counter([{"role": "system", "content": digest}])
-    if budget < 1:
-        return ""
+    budget = _knowledge_budget(repo, task, turn_context, digest, ask_mode, plan_status, plan_body, counter)
     return build_knowledge_message(
         repo,
         owner_id,
@@ -292,6 +293,65 @@ def _knowledge_digest(repo: Repository, task, turn_context: TurnContext | None, 
         token_budget=budget,
         count_tokens=counter,
         embedder=_embed_question,
+    )
+
+
+def _knowledge_budget(
+    repo: Repository,
+    task,
+    turn_context: TurnContext | None,
+    digest: str,
+    ask_mode: bool,
+    plan_status: str,
+    plan_body: str,
+    counter,
+) -> int:
+    if turn_context is None:
+        limit = DEFAULT_LIMIT
+        output_reserve = DEFAULT_OUTPUT_LIMIT
+        tools = 0
+        system = ""
+    else:
+        limit = turn_context.limit_tokens
+        output_reserve = turn_context.output_reserve
+        tools = turn_context.extra_tokens
+        system = turn_context.system
+    occupied = _occupied_without_knowledge(repo, task, turn_context, system, digest, ask_mode, plan_status, plan_body)
+    used = counter(occupied) if occupied else 0
+    return limit - output_reserve - tools - used
+
+
+def _occupied_without_knowledge(
+    repo: Repository,
+    task,
+    turn_context: TurnContext | None,
+    system: str,
+    digest: str,
+    ask_mode: bool,
+    plan_status: str,
+    plan_body: str,
+) -> list[dict]:
+    prefix: list[dict] = []
+    if turn_context is not None:
+        prefix.append({"role": "system", "content": system})
+    if digest:
+        prefix.append({"role": "system", "content": digest})
+    summary = ""
+    prior: list[tuple[str, str]] = []
+    if task.conversation_id:
+        if turn_context is None:
+            prior = repo.succeeded_turns(task.conversation_id)
+        else:
+            records = [TurnRecord(*row) for row in repo.succeeded_turn_records(task.conversation_id)]
+            summary, until, _used = repo.get_context_state(task.conversation_id)
+            prior = _pairs(turns_after(records, until))
+    return context_messages(
+        prefix,
+        summary,
+        prior,
+        task.raw_request,
+        ask=ask_message(ask_mode),
+        plan=plan_message(plan_status, plan_body),
     )
 
 

@@ -1,5 +1,6 @@
 from app.auth.passwords import hash_password
-from app.context.assemble import assemble_model_input
+from app.context.assemble import assemble_model_input, context_messages
+from app.context.plan import plan_message
 from app.graph.build import build_graph, invoke_graph
 from app.knowledge.embed import pack_vector
 from app.llm.protocol import AssistantMessage
@@ -7,7 +8,7 @@ from app.llm.usage import count_messages_locally
 from app.storage.files import FileStore
 from app.storage.repository import SqliteRepository
 from app.tasks.runner import TurnContext, run_turn
-from app.tasks.states import SUCCEEDED
+from app.tasks.states import RUNNING, SUCCEEDED
 from app.tools.registry import production_registry
 
 HEADER = (
@@ -41,8 +42,8 @@ def test_closer_ready_passage_is_quoted_with_its_title(tmp_path, monkeypatch):
 
     assert seen == ["什么是分数"]
     assert message.startswith(HEADER + "\n资料《分数的意义》：\n把整体平均分成若干份。")
-    assert "圆的周长" not in message
-    assert "周长等于直径乘圆周率。" not in message
+    assert message.index("资料《分数的意义》：") < message.index("资料《圆的周长》：")
+    assert "\n\n资料《圆的周长》：\n周长等于直径乘圆周率。" in message
 
 
 def test_empty_model_name_skips_retrieval(tmp_path, monkeypatch):
@@ -93,7 +94,7 @@ def test_budget_below_title_line_plus_64_returns_blank(tmp_path, monkeypatch):
             repo,
             owner,
             "什么是分数",
-            embedder=lambda question: [[1.0, 0.0]],
+            embedder=_explode,
             token_budget=10 + 64 - 1,
             count_tokens=count_tokens,
         )
@@ -243,7 +244,8 @@ def test_run_turn_injects_retrieved_knowledge(tmp_path, monkeypatch):
     contents = [item["content"] for item in seen[0]]
     assert contents[0] == "系统"
     assert contents[1].startswith(HEADER + "\n资料《分数的意义》：\n把整体平均分成若干份。")
-    assert "圆的周长" not in contents[1]
+    assert contents[1].index("资料《分数的意义》：") < contents[1].index("资料《圆的周长》：")
+    assert "\n\n资料《圆的周长》：\n周长等于直径乘圆周率。" in contents[1]
     assert contents[2] == "什么是分数"
 
 
@@ -265,6 +267,61 @@ def test_run_turn_still_invokes_when_embedding_returns_nothing(tmp_path, monkeyp
     assert repo.get_task(task.id).status == SUCCEEDED
     assert seen
     assert HEADER not in "\n".join(item["content"] for item in seen[0])
+
+
+def test_run_turn_skips_embedding_when_the_prompt_fills_the_window(tmp_path, monkeypatch):
+    monkeypatch.setenv("LLM_EMBEDDING_MODEL", MODEL)
+    repo, store, conversation_id, owner = _conversation(tmp_path)
+    _ready(repo, owner, "甲", "短正文。", [1.0, 0.0])
+    earlier = repo.submit_message(conversation_id, "上一问", owner)
+    repo.transition(earlier.id, RUNNING)
+    repo.transition(earlier.id, SUCCEEDED, reply="上一答")
+    assert repo.save_plan_mode(conversation_id, owner, True) is True
+    assert repo.save_plan_body(conversation_id, owner, "先讲分数") is not None
+
+    def complete(messages, tools, sink=None):
+        return AssistantMessage(content="先按一般讲法回答。", tool_calls=[])
+
+    embedded = []
+
+    def explode(settings, texts, opener=None):
+        embedded.append(texts)
+        return None
+
+    monkeypatch.setattr("app.knowledge.embed.embed_texts", explode)
+    graph = build_graph(production_registry(), complete, system="系统")
+    task = repo.submit_message(conversation_id, "什么是分数", owner)
+    status, body = repo.get_plan_state(conversation_id)
+    occupied = context_messages(
+        [{"role": "system", "content": "系统"}],
+        "",
+        [("上一问", "上一答")],
+        "什么是分数",
+        plan=plan_message(status, body),
+    )
+    used = count_messages_locally(occupied)
+    title_cost = count_messages_locally([{"role": "system", "content": "资料《甲》："}])
+    output_reserve = 50
+    tools = 7
+    run_turn(
+        repo,
+        store,
+        graph,
+        task.id,
+        TurnContext(
+            system="系统",
+            limit_tokens=used + tools + output_reserve + title_cost + 64 - 1,
+            limit_source="fallback",
+            count_tokens=count_messages_locally,
+            summarize=lambda prompt: None,
+            output_reserve=output_reserve,
+            extra_tokens=tools,
+        ),
+    )
+
+    assert repo.get_task(task.id).status == SUCCEEDED
+    assert embedded == []
+    assert HEADER not in (repo.get_task(task.id).reply or "")
 
 
 def _retrieve(repo, owner, question, *, embedder, token_budget, count_tokens=count_messages_locally):
