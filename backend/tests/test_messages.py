@@ -54,11 +54,13 @@ def test_dotenv_llm_source_uses_file_credentials(monkeypatch, tmp_path):
             body = json.loads(self.rfile.read(length).decode("utf-8"))
             seen["model"] = body.get("model")
             seen["authorization"] = self.headers.get("Authorization")
-            payload = json.dumps(
-                {"choices": [{"message": {"content": "来自文件配置", "tool_calls": None}}]}
-            ).encode("utf-8")
+            chunk = json.dumps(
+                {"choices": [{"delta": {"content": "来自文件配置"}}]},
+                ensure_ascii=False,
+            )
+            payload = f"data: {chunk}\n\ndata: [DONE]\n\n".encode("utf-8")
             self.send_response(200)
-            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Type", "text/event-stream")
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
