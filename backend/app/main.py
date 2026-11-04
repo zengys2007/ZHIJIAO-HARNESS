@@ -840,9 +840,23 @@ def create_app(settings: Settings | None = None, complete=None, probe=None, env_
     return app
 
 
+DEMO_USERNAME = "smoketest"
+DEMO_PASSWORD = "smoke-test-123"
+DEMO_DISPLAY_NAME = "演示老师"
+
+
+def ensure_demo_user(repository) -> None:
+    """登录页「填充演示账号」使用的本地账号。已存在则不改密码。"""
+    if repository.get_user_by_username(DEMO_USERNAME) is not None:
+        return
+    repository.create_user(DEMO_USERNAME, DEMO_DISPLAY_NAME, hash_password(DEMO_PASSWORD))
+
+
 def main() -> None:
     load_env_file()
-    uvicorn.run(create_app(), host="127.0.0.1", port=8000)
+    app = create_app()
+    ensure_demo_user(app.state.repository)
+    uvicorn.run(app, host="127.0.0.1", port=8000)
 
 
 def _public_user(user: User) -> dict:

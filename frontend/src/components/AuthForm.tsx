@@ -36,7 +36,7 @@ function isValidDisplayName(value: string): boolean {
   return n >= 1 && n <= 32;
 }
 
-// 演示账号：本地开发库里的冒烟账号，仅用于一键填充演示
+// 演示账号：与后端启动时创建的本地账号一致，只填入表单，不提交登录
 const DEMO_USERNAME = "smoketest";
 const DEMO_PASSWORD = "smoke-test-123";
 

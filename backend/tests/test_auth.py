@@ -7,7 +7,7 @@ from app.auth.remember import issue_remember_token, remember_now
 from app.auth.sessions import resolve_user, sign_cookie
 from app.config import Settings
 from app.llm.protocol import AssistantMessage
-from app.main import create_app
+from app.main import create_app, ensure_demo_user
 from app.storage import open_repository
 from app.storage.repository import SqliteRepository
 
@@ -182,6 +182,23 @@ def test_existing_conversations_go_to_the_local_admin_without_keeping_the_passwo
     original_hash = admin.password_hash
     again = SqliteRepository(path, admin_password="another-password")
     assert again.get_user_by_username("local-admin").password_hash == original_hash
+
+
+def test_demo_account_from_the_login_form_can_sign_in(tmp_path):
+    app = create_app(Settings(data_dir=tmp_path, auth_secret=SECRET), complete=_ok)
+    ensure_demo_user(app.state.repository)
+    ensure_demo_user(app.state.repository)
+    client = TestClient(app)
+
+    signed_in = client.post(
+        "/api/auth/login",
+        json={"username": "smoketest", "password": "smoke-test-123"},
+    )
+
+    assert signed_in.status_code == 200
+    assert signed_in.json()["username"] == "smoketest"
+    assert signed_in.json()["display_name"] == "演示老师"
+    assert "smoke-test-123" not in signed_in.text
 
 
 def test_empty_database_does_not_create_a_local_admin(tmp_path):
