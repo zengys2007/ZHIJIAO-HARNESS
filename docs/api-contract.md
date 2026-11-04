@@ -1,10 +1,10 @@
 # 智教 Harness MVP 接口契约
 
-状态：已确认（2026-10-21）。对话 MVP 已于 2026-10-22 标记完成。2026-10-22 起，对话和模型试连要求登录，规则见第 10 节。
+状态：已确认（2026-10-21）。对话 MVP 已于 2026-10-22 标记完成。2026-10-22 起，对话和模型试连要求登录，规则见第 10 节。2026-11-04 起收录知识库，规则见第 11 节。
 
-本文是对话接口的字段契约。产品行为以 [MVP 路线](superpowers/specs/2026-10-21-mvp-roadmap.md) 为准。路径或状态含义有冲突时，先改路线，再改本文。
+本文是对话接口的字段契约。产品行为以 [MVP 路线](superpowers/specs/2026-10-21-mvp-roadmap.md) 为准。知识库行为以 [知识库设计](superpowers/specs/2026-11-04-knowledge-base-design.md) 为准。路径或状态含义有冲突时，先改对应规格，再改本文。
 
-范围包括四个对话接口、第 6 节的任务文字流、当前教师的会话列表、第 8 节的模型试连，以及第 10 节的注册、登录、退出和当前用户。不包含 `GET /health`、工作台页面，也不包含产物预览、修改和导出。那些路由不在本契约里。
+范围包括四个对话接口、第 6 节的任务文字流、当前教师的会话列表、第 8 节的模型试连、第 10 节的注册、登录、退出和当前用户，以及第 11 节的知识库。不包含 `GET /health`、工作台页面，也不包含产物预览、修改和导出。那些路由不在本契约里。
 
 ## 1. 共同约定
 
@@ -306,7 +306,7 @@
 
 ## 8. 试连模型
 
-`GET /api/llm/config` 只返回两边的服务地址、模型名，以及是否已有密钥。响应里不出现密钥。
+`GET /api/llm/config` 返回 `environment` 和 `dotenv` 两个公开对象。每个对象含服务地址、对话模型名、`has_api_key`，以及 `embedding_model`。响应里不出现密钥。
 
 `POST /api/llm/probe`
 
@@ -427,3 +427,121 @@
 `DELETE /api/conversations/{conversation_id}`。成功 204，没有正文。同一次事务删除该会话、它的任务和这些任务的事件；任务关联的产物连同版本和已存文件一起删除。班级、成绩、教案不删除。有 `pending` 或 `running` 任务时返回 409 `conflict`，`error.message` 为「这条会话还在回复，等它结束再删除。」别人的会话或不存在的会话返回 404 `not_found`。
 
 创建会话时写入当前教师。读取、发送、置顶、删除和轮询只面对该教师的记录。
+
+## 11. 知识库
+
+登录规则与第 1 节相同，从 Cookie `zhijiao_session` 识别教师。未登录返回 401 `unauthenticated`。资料 `document_id` 是 32 位小写十六进制。格式不对、不存在或不属于当前教师，都返回 404 `not_found`，`error.message` 为「没有找到这份资料。」字段不识别、标题不合法、扩展名未登记、文件过大、正文为空、份数或块数超限、没有可重新嵌入的文字，以及项目 `.env` 不存在，返回 400 `invalid_input`。说明给教师看，不包含路径、堆栈或密钥。错误正文仍是 `error.code`、`message`、`retryable`。
+
+粘贴和保存模型名的正文是 JSON。上传是 `multipart/form-data`。删除成功没有正文。
+
+| 方法与路径 | 成功 | 作用 |
+| --- | --- | --- |
+| `POST /api/knowledge/documents` | `201`，资料对象 | 保存粘贴或上传。抽取成功且已配置模型名时，响应之后开始嵌入 |
+| `GET /api/knowledge/documents` | `200`，`embedding_model` 与 `documents` | 只列出当前教师的资料和展示状态 |
+| `DELETE /api/knowledge/documents/{id}` | `204` | 删除原文、文本和向量 |
+| `POST /api/knowledge/documents/{id}/embed` | `202`，资料对象，状态 `pending` | 重新嵌入已抽出文字的资料 |
+| `PUT /api/knowledge/embedding-model` | `200`，`{"embedding_model":"..."}` | 保存或清空模型名 |
+
+资料对象：
+
+```json
+{
+  "document_id": "0123456789abcdef0123456789abcdef",
+  "title": "课堂笔记",
+  "source": "paste",
+  "filename": "",
+  "extension": "",
+  "status": "pending",
+  "message": "",
+  "created_at": "2026-11-04T02:00:00Z"
+}
+```
+
+| 字段 | 规则 |
+| --- | --- |
+| `document_id` | 32 位小写十六进制 |
+| `title` | 去掉首尾空白后为 1 到 64 个码位 |
+| `source` | `paste` 或 `upload` |
+| `filename` | 粘贴为 `""`。上传为去掉路径后的原始文件名，只用于显示 |
+| `extension` | 粘贴为 `""`。上传为 `.txt`、`.md`、`.pdf`、`.docx` 之一 |
+| `status` | `pending`、`ready` 或 `failed`。列表、创建和重新嵌入的响应都用展示状态 |
+| `message` | 给教师看的说明。没有说明时为 `""` |
+| `created_at` | UTC，`YYYY-MM-DDTHH:MM:SSZ` |
+
+展示状态：存储已是 `ready`，但分块上的模型名与当前 `LLM_EMBEDDING_MODEL` 不同，或当前模型名为空，列表和资料对象里的 `status` 为 `pending`。模型名为空时 `message` 为「尚未配置嵌入模型，检索暂停」。模型名更换后 `message` 为「嵌入模型已更换，请重新生成向量」。这两种情况不把存储状态改成 `failed`。存储还不是 `ready` 时，展示直接使用存储里的 `status` 和 `message`。
+
+`embedding_model` 出现在列表响应里，也出现在 `GET /api/llm/config` 的 `environment` 和 `dotenv` 两个对象里。这三处都不包含密钥。
+
+服务端调用嵌入时，`LLM_EMBEDDING_BASE_URL` 与 `LLM_EMBEDDING_API_KEY` 都非空则用这一对；任一为空则地址和密钥沿用 `LLM_BASE_URL` 与 `LLM_API_KEY`。知识库接口不读写这两对地址和密钥，响应里也不出现它们的值。
+
+### 11.1 保存资料
+
+`POST /api/knowledge/documents`
+
+粘贴正文只有这两个字段：
+
+```json
+{ "title": "课堂笔记", "content": "分数先通分再比较。" }
+```
+
+`title` 和 `content` 都必填，且都是字符串。上传的 `Content-Type` 为 `multipart/form-data`。文件字段名是 `file`，必须带文件名。标题字段 `title` 可省略；省略或去掉首尾空白后为空时，用文件名去掉扩展名后的文字做标题，仍须满足标题长度。类型只看文件名扩展名。一位教师最多 50 份，失败的也计入。粘贴正文去掉首尾空白后不能为空，最长 200000 个字符。上传不超过 10 MB。
+
+201 的正文是上面的资料对象。粘贴的 `source` 为 `paste`，`filename` 和 `extension` 为 `""`。上传的 `source` 为 `upload`。抽出文字且已配置模型名时，响应当时 `status` 为 `pending`，响应返回之后才在本进程后台嵌入。模型名为空时仍保存资料，不开始嵌入。`.txt` 或 `.md` 按 UTF-8 读不出时再按 gb18030；两种都失败则不保存。`.pdf` 和 `.docx` 抽出的文字去掉首尾空白后为空时仍保存，201 的 `status` 为 `failed`，`message` 为「这个文件里没有抽出文字」。
+
+### 11.2 读取列表
+
+`GET /api/knowledge/documents`。没有正文。200：
+
+```json
+{
+  "embedding_model": "embed-small",
+  "documents": []
+}
+```
+
+`embedding_model` 是当前进程里的 `LLM_EMBEDDING_MODEL`，没有配置时为 `""`。`documents` 只含当前教师的资料，按 `created_at` 升序，相同时按 `document_id` 升序。每项都是资料对象，`status` 和 `message` 为展示状态。
+
+### 11.3 删除资料
+
+`DELETE /api/knowledge/documents/{id}`。没有正文。成功 204，没有正文，并删除该资料的原文、文本和向量。别人的资料、不存在的资料，或 `id` 不是 32 位小写十六进制，返回 404。
+
+### 11.4 重新嵌入
+
+`POST /api/knowledge/documents/{id}/embed`。没有正文。资料已经抽出文字时，先把存储状态改为 `pending`，再返回 202 和资料对象，`status` 为 `pending`，然后在本进程后台嵌入。同一资料已有后台嵌入在跑时，再次调用仍返回 202 和当前资料对象，不把状态重写一遍，也不启动第二份工作。没有分块时返回 400，`error.message` 为「这份资料没有抽出文字，请重新上传或粘贴。」别人的资料和不存在的资料返回 404。
+
+### 11.5 嵌入模型名
+
+`PUT /api/knowledge/embedding-model`
+
+正文只有 `model`：
+
+```json
+{ "model": "embed-small" }
+```
+
+`model` 为 `""` 时清空。非空时为 1 到 200 个码位，且不含空白。200：
+
+```json
+{ "embedding_model": "embed-small" }
+```
+
+已有项目 `.env` 时，只替换或追加 `LLM_EMBEDDING_MODEL` 这一行，并写入进程环境。不改写文件里的其他行，不改写地址或密钥，响应里也不返回密钥。`.env` 不存在时返回 400，`error.message` 为「请先准备 .env 文件。」，并且不创建该文件。
+
+| 情况 | HTTP | `error.message` |
+| --- | --- | --- |
+| 未登录 | 401 | 请先登录。 |
+| 多出来的字段，粘贴字段不是字符串，或上传格式不对 | 400 | 请求里有不能识别的字段。 |
+| JSON 无法解析 | 400 | 这句话是空的，或请求格式不对。 |
+| 标题不合法 | 400 | 标题写成 1 到 64 个字。 |
+| 粘贴正文为空 | 400 | 正文去掉首尾空白后不能为空。 |
+| 粘贴正文超过 200000 个字符 | 400 | 正文最长 200000 个字符。 |
+| 扩展名未登记 | 400 | 扩展名不在登记表里。 |
+| 上传没有文件名 | 400 | 没有文件名。 |
+| 文件超过 10 MB | 400 | 文件不能超过 10 MB。 |
+| `.txt` 或 `.md` 两种编码都失败 | 400 | 文件须能按 UTF-8 或 gb18030 读取。 |
+| 已有 50 份 | 400 | 最多保存 50 份资料。 |
+| 超过 200 块 | 400 | 内容超过 200 块，请拆成多份。 |
+| 重新嵌入时没有分块 | 400 | 这份资料没有抽出文字，请重新上传或粘贴。 |
+| 模型名不合法 | 400 | 模型名留空表示清空；填写时写成 1 到 200 个不含空白的字符。 |
+| 项目 `.env` 不存在 | 400 | 请先准备 .env 文件。 |
+| 资料 id 不对、不存在，或不属于当前教师 | 404 | 没有找到这份资料。 |
