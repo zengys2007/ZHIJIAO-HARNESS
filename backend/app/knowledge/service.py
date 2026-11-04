@@ -115,6 +115,12 @@ def embed_document(repo, document_id: str, owner_id: str, embedder: Embedder) ->
         lock.release()
 
 
+def embed_lock_held(document_id: str) -> bool:
+    with _embed_locks_guard:
+        lock = _embed_locks.get(document_id)
+        return lock is not None and lock.locked()
+
+
 def display_document(
     document: KnowledgeDocument,
     chunks: list[KnowledgeChunk],

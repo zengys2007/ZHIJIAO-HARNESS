@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings, default_env_path
+from app.knowledge.service import _lock_for
 from app.llm.protocol import AssistantMessage
 from app.main import create_app
 
@@ -281,6 +282,33 @@ def test_embed_returns_pending_and_schedules_without_network(tmp_path, monkeypat
     malformed = alice.post("/api/knowledge/documents/not-an-id/embed")
     assert malformed.status_code == 404
     assert len(jobs) == 2
+
+
+def test_embed_while_lock_held_returns_pending_without_a_new_job(tmp_path, monkeypatch):
+    jobs = []
+    monkeypatch.setenv("LLM_EMBEDDING_MODEL", "embed-unit")
+    _app_obj, alice, _bob = _two_teachers(tmp_path, jobs)
+
+    created = alice.post(
+        "/api/knowledge/documents",
+        json={"title": "课堂笔记", "content": "分数先通分再比较。"},
+    )
+    assert created.status_code == 201
+    document_id = created.json()["document_id"]
+    assert created.json()["status"] == "pending"
+    queued = len(jobs)
+
+    lock = _lock_for(document_id)
+    assert lock.acquire(blocking=False)
+    try:
+        accepted = alice.post(f"/api/knowledge/documents/{document_id}/embed")
+        assert accepted.status_code == 202
+        body = accepted.json()
+        assert body["document_id"] == document_id
+        assert body["status"] == "pending"
+        assert len(jobs) == queued
+    finally:
+        lock.release()
 
 
 def test_llm_config_includes_embedding_model(tmp_path, monkeypatch):

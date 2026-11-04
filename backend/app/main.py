@@ -87,6 +87,7 @@ from app.knowledge.service import (
     create_upload,
     display_document,
     embed_document,
+    embed_lock_held,
     schedule_background,
 )
 from app.llm.complete import make_complete
@@ -940,6 +941,9 @@ def create_app(settings: Settings | None = None, complete=None, probe=None, env_
         ]
         if not chunks:
             return JSONResponse(error_payload("invalid_input", NO_CHUNKS_MESSAGE), status_code=400)
+        if embed_lock_held(document_id):
+            status, message = display_document(document, chunks, embedding_model_name())
+            return JSONResponse(document_payload(document, status, message), status_code=202)
         repository.set_knowledge_status(document_id, user.id, "pending", "")
         updated = repository.get_knowledge_document(document_id, user.id)
         if updated is None:
