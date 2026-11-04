@@ -15,6 +15,7 @@ class Settings:
     context_token_limit: int = 1_000_000
     auth_secret: str = ""
     auth_admin_password: str = ""
+    llm_embedding_model: str = ""
 
 
 _filled_from_file: dict[str, str] = {}
@@ -105,4 +106,27 @@ def load_settings() -> Settings:
         context_token_limit=context_limit,
         auth_secret=auth_secret,
         auth_admin_password=os.environ.get("AUTH_ADMIN_PASSWORD", ""),
+        llm_embedding_model=os.environ.get("LLM_EMBEDDING_MODEL", "").strip(),
     )
+
+
+def embedding_model_name() -> str:
+    return os.environ.get("LLM_EMBEDDING_MODEL", "").strip()
+
+
+def write_embedding_model(model: str, path: Path) -> None:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    lines = path.read_text(encoding="utf-8").splitlines()
+    replaced = False
+    next_lines: list[str] = []
+    for line in lines:
+        if line.startswith("LLM_EMBEDDING_MODEL="):
+            next_lines.append(f"LLM_EMBEDDING_MODEL={model}")
+            replaced = True
+        else:
+            next_lines.append(line)
+    if not replaced:
+        next_lines.append(f"LLM_EMBEDDING_MODEL={model}")
+    path.write_text("\n".join(next_lines) + "\n", encoding="utf-8")
+    os.environ["LLM_EMBEDDING_MODEL"] = model

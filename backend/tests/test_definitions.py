@@ -147,6 +147,27 @@ def test_settings_refuse_to_start_without_a_model_key(monkeypatch):
         load_settings()
 
 
+def test_embedding_model_is_optional_and_written_as_one_line(tmp_path, monkeypatch):
+    from app.config import load_settings, write_embedding_model
+
+    monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("LLM_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_MODEL", "chat-model")
+    monkeypatch.setenv("AUTH_SECRET", "1234567890123456")
+    monkeypatch.delenv("LLM_EMBEDDING_MODEL", raising=False)
+
+    assert load_settings().llm_embedding_model == ""
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("LLM_MODEL=chat-model\nLLM_API_KEY=test-key\n", encoding="utf-8")
+    write_embedding_model("embed-model", env_file)
+
+    text = env_file.read_text(encoding="utf-8")
+    assert "LLM_API_KEY=test-key" in text
+    assert "LLM_EMBEDDING_MODEL=embed-model" in text
+    assert os.environ["LLM_EMBEDDING_MODEL"] == "embed-model"
+
+
 def _llm_env(monkeypatch):
     monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:9")
     monkeypatch.setenv("LLM_API_KEY", "test-key")
