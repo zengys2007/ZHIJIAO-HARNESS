@@ -16,6 +16,8 @@ class Settings:
     auth_secret: str = ""
     auth_admin_password: str = ""
     llm_embedding_model: str = ""
+    llm_embedding_base_url: str = ""
+    llm_embedding_api_key: str = ""
 
 
 _filled_from_file: dict[str, str] = {}
@@ -107,6 +109,8 @@ def load_settings() -> Settings:
         auth_secret=auth_secret,
         auth_admin_password=os.environ.get("AUTH_ADMIN_PASSWORD", ""),
         llm_embedding_model=os.environ.get("LLM_EMBEDDING_MODEL", "").strip(),
+        llm_embedding_base_url=os.environ.get("LLM_EMBEDDING_BASE_URL", "").strip(),
+        llm_embedding_api_key=os.environ.get("LLM_EMBEDDING_API_KEY", "").strip(),
     )
 
 

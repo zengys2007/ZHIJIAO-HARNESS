@@ -19,8 +19,8 @@
 - 侧栏「知识库」按钮位于「备课与学情」下面，打开独立页面。
 - 粘贴标题和正文，或上传 `.txt`、`.md`、`.pdf`、`.docx`。
 - 解析器按扩展名登记。以后新增格式只登记解析器。
-- 文本切块、调用 `{LLM_BASE_URL}/embeddings`、把向量存进 SQLite。
-- 嵌入模型名是 `LLM_EMBEDDING_MODEL`。地址和密钥沿用 `LLM_BASE_URL`、`LLM_API_KEY`。
+- 文本切块、调用嵌入接口、把向量存进 SQLite。
+- 嵌入模型名是 `LLM_EMBEDDING_MODEL`。`LLM_EMBEDDING_BASE_URL` 与 `LLM_EMBEDDING_API_KEY` 都非空时用这一对；任一为空则地址和密钥沿用 `LLM_BASE_URL`、`LLM_API_KEY`。
 - 每一轮对话按教师当前这句话检索本人已就绪的分块，并注入单独的系统消息。
 - 资料、原文和向量按登录教师隔离。
 
@@ -36,7 +36,7 @@
 
 ## 配置
 
-`LLM_EMBEDDING_MODEL` 与现有对话配置放在一起，从环境变量读取。`.env.example` 里该项为空。进程启动不要求它有值；缺失时对话和资料保存仍可用，检索暂停。
+`LLM_EMBEDDING_MODEL`、`LLM_EMBEDDING_BASE_URL`、`LLM_EMBEDDING_API_KEY` 与现有对话配置放在一起，从环境变量读取。`.env.example` 里这三项为空。进程启动不要求嵌入配置有值；模型名缺失时对话和资料保存仍可用，检索暂停。地址和密钥都填写时，嵌入不再使用对话的地址和密钥。
 
 知识库页是唯一可以修改这项的地方。`PUT /api/knowledge/embedding-model` 只接受模型名，写回进程环境和项目 `.env` 里的这一行，不改写地址和密钥，响应里也不返回密钥。设置页的本地供应商只显示当前模型名。
 
@@ -76,7 +76,7 @@ SQLite 表由 `repository.py` 创建，调用方不写 SQL。
 
 已配置模型名，且文本抽取成功时，创建接口先返回资料，再在本进程后台嵌入。后台开始时状态为 `pending`。全部块成功后改为 `ready`。任一次嵌入请求失败则改为 `failed`，已写入的向量可以留下，检索仍要求该资料为 `ready` 且模型名一致，因此失败资料不参与检索。进程在后台结束前重启时，资料停在 `pending`，由页面上的重试继续。
 
-嵌入请求是 `POST {LLM_BASE_URL}/embeddings`，超时使用 `LLM_TIMEOUT_SECONDS`。正文为 JSON：`model` 是嵌入模型名，`input` 是字符串数组，每次数组最多 16 段。成功响应使用 `data` 数组里的 `embedding` 数字列表，顺序与 `input` 相同，且长度一致。形状不对、HTTP 错误、超时或连接失败都算这次嵌入失败，不重试。日志只记资料 id 和失败类别，不记正文、向量或密钥。
+嵌入请求是 `POST {嵌入地址}/embeddings`。嵌入地址在专用地址和密钥都已配置时取 `LLM_EMBEDDING_BASE_URL`，否则取 `LLM_BASE_URL`。超时使用 `LLM_TIMEOUT_SECONDS`。正文为 JSON：`model` 是嵌入模型名，`input` 是字符串数组，每次数组最多 16 段。成功响应使用 `data` 数组里的 `embedding` 数字列表，顺序与 `input` 相同，且长度一致。形状不对、HTTP 错误、超时或连接失败都算这次嵌入失败，不重试。日志只记资料 id 和失败类别，不记正文、向量或密钥。
 
 `POST /api/knowledge/documents/{id}/embed` 用于已经抽出文字、但需要重新嵌入的资料。它立即返回 `202`，存储状态改为 `pending`。同一资料已有后台嵌入在跑时，再次调用只返回 `202`，不启动第二份工作。别人的资料和不存在的资料返回 `404`。抽取失败、没有分块的资料返回 `invalid_input`，说明须重新上传或粘贴。
 

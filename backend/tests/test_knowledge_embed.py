@@ -120,6 +120,38 @@ def test_batches_hold_at_most_sixteen_texts(monkeypatch):
     assert result == [[float(index), 0.0] for index in range(17)]
 
 
+def test_dedicated_embedding_endpoint_replaces_the_chat_target(monkeypatch):
+    monkeypatch.setenv("LLM_EMBEDDING_MODEL", _MODEL)
+    settings = Settings(
+        data_dir=Path("."),
+        llm_base_url="http://llm.example/v1/",
+        llm_api_key="chat-key",
+        llm_embedding_base_url="https://embed.example/compatible-mode/v1/",
+        llm_embedding_api_key="embed-key",
+    )
+    opener = _Opener({"data": [{"embedding": [1.0, 0.0]}]})
+
+    assert embed_texts(settings, ["第一段"], opener) == [[1.0, 0.0]]
+    assert opener.calls[0]["url"] == "https://embed.example/compatible-mode/v1/embeddings"
+    assert opener.calls[0]["authorization"] == "Bearer embed-key"
+    assert opener.calls[0]["body"]["model"] == _MODEL
+
+
+def test_partial_embedding_endpoint_keeps_the_chat_target(monkeypatch):
+    monkeypatch.setenv("LLM_EMBEDDING_MODEL", _MODEL)
+    settings = Settings(
+        data_dir=Path("."),
+        llm_base_url="http://llm.example/v1/",
+        llm_api_key=_API_KEY,
+        llm_timeout_seconds=11,
+        llm_embedding_base_url="https://embed.example/compatible-mode/v1",
+    )
+    opener = _Opener({"data": [{"embedding": [1.0, 0.0]}]})
+
+    assert embed_texts(settings, ["第一段"], opener) == [[1.0, 0.0]]
+    _expect_request(opener.calls[0])
+
+
 def test_empty_model_name_returns_none_without_request(monkeypatch):
     monkeypatch.setenv("LLM_EMBEDDING_MODEL", "   ")
     opener = _Opener({"data": [{"embedding": [1.0, 0.0]}]})

@@ -49,14 +49,23 @@ def embed_texts(settings, texts: list[str], opener=None) -> list[list[float]] | 
     return vectors
 
 
+def _embedding_target(settings) -> tuple[str, str]:
+    base = settings.llm_embedding_base_url.strip()
+    key = settings.llm_embedding_api_key.strip()
+    if base and key:
+        return base.rstrip("/"), key
+    return settings.llm_base_url.rstrip("/"), settings.llm_api_key
+
+
 def _embed_batch(settings, model: str, batch: list[str], open_url) -> list[list[float]] | None:
-    url = settings.llm_base_url.rstrip("/") + "/embeddings"
+    base_url, api_key = _embedding_target(settings)
+    url = base_url + "/embeddings"
     body = {"model": model, "input": batch}
     request = urllib.request.Request(
         url,
         data=json.dumps(body).encode("utf-8"),
         headers={
-            "Authorization": "Bearer " + settings.llm_api_key,
+            "Authorization": "Bearer " + api_key,
             "Content-Type": "application/json",
         },
         method="POST",
