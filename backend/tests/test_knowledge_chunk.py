@@ -15,3 +15,25 @@ def test_chunk_rejects_more_than_200_pieces():
     except ChunkLimitError:
         return
     raise AssertionError("expected ChunkLimitError")
+
+
+def test_long_paragraph_cuts_inside_a_window_and_stops(monkeypatch):
+    import app.knowledge.chunk as chunk
+
+    real = chunk.text_tokens
+    widest = 0
+
+    def wrapped(text: str) -> int:
+        nonlocal widest
+        widest = max(widest, len(text))
+        if len(text) > 4096 or "尾" in text:
+            raise AssertionError("probe left the token window")
+        return real(text)
+
+    monkeypatch.setattr(chunk, "text_tokens", wrapped)
+    try:
+        chunk.chunk_text(("甲" * 100_000) + ("尾" * 1000))
+    except ChunkLimitError:
+        assert widest <= 4096
+        return
+    raise AssertionError("expected ChunkLimitError")
