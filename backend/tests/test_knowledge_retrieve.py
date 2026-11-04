@@ -46,6 +46,26 @@ def test_closer_ready_passage_is_quoted_with_its_title(tmp_path, monkeypatch):
     assert "\n\n资料《圆的周长》：\n周长等于直径乘圆周率。" in message
 
 
+def test_settings_embedder_receives_the_question_as_one_text(tmp_path, monkeypatch):
+    monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("LLM_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_MODEL", "chat")
+    monkeypatch.setenv("AUTH_SECRET", "test-secret-value")
+    monkeypatch.setenv("LLM_EMBEDDING_MODEL", MODEL)
+    repo, owner = _repo(tmp_path)
+    _ready(repo, owner, "分数的意义", "把整体平均分成若干份。", [1.0, 0.0])
+    seen = []
+
+    def embedder(settings, texts):
+        seen.append(texts)
+        return [[1.0, 0.0]]
+
+    message = _retrieve(repo, owner, "什么是分数", embedder=embedder, token_budget=10_000)
+
+    assert seen == [["什么是分数"]]
+    assert "分数的意义" in message
+
+
 def test_empty_model_name_skips_retrieval(tmp_path, monkeypatch):
     monkeypatch.setenv("LLM_EMBEDDING_MODEL", "")
     repo, owner = _repo(tmp_path)

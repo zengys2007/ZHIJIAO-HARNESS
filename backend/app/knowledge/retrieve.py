@@ -1,6 +1,8 @@
 """按提问从教师知识库取出最接近的段落，写成一条系统消息。"""
 
-from app.config import embedding_model_name
+import inspect
+
+from app.config import embedding_model_name, load_settings
 from app.knowledge.embed import cosine, unpack_vector
 
 HEADER = (
@@ -51,7 +53,10 @@ def _candidates(repo, owner_id: str, model: str) -> list[tuple]:
 
 def _query_vector(embedder, question: str) -> list[float] | None:
     try:
-        vectors = embedder(question)
+        if _takes_settings(embedder):
+            vectors = embedder(load_settings(), [question])
+        else:
+            vectors = embedder(question)
     except Exception:
         return None
     if not isinstance(vectors, list) or not vectors:
@@ -78,6 +83,24 @@ def _rank(candidates, query: list[float]) -> list[tuple]:
         scored.append((score, document.created_at, chunk.ordinal, document.title, chunk.text))
     scored.sort(key=lambda item: (-item[0], item[1], item[2]))
     return scored
+
+
+def _takes_settings(embedder) -> bool:
+    try:
+        signature = inspect.signature(embedder)
+    except (TypeError, ValueError):
+        return False
+    required = 0
+    for parameter in signature.parameters.values():
+        if parameter.kind in (
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        ):
+            continue
+        if parameter.default is inspect.Parameter.empty:
+            required += 1
+    return required >= 2
 
 
 def _vector(chunk, width: int) -> list[float] | None:
