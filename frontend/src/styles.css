@@ -3110,3 +3110,131 @@ button:focus-visible {
   line-height: 1.6;
   overflow-wrap: anywhere;
 }
+
+.knowledge-library {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.knowledge-library h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--faint);
+}
+
+.knowledge-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.knowledge-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--white);
+}
+
+.knowledge-row-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.knowledge-row-main strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledge-status {
+  flex: none;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--segment);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 22px;
+}
+
+.knowledge-status.is-ready {
+  background: var(--user);
+  color: var(--accent-strong);
+}
+
+.knowledge-status.is-failed {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.knowledge-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.knowledge-delete {
+  height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--danger);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.knowledge-delete:hover {
+  background: var(--danger-bg);
+}
+
+.knowledge-file {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.knowledge-pick {
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--white);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.knowledge-pick:hover:not(:disabled) {
+  border-color: var(--hover-border);
+}
+
+.knowledge-pick:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.knowledge-filename {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--faint);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

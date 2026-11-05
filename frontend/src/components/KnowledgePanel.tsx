@@ -24,6 +24,7 @@ export function KnowledgePanel({ api = defaultApi }: Props) {
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [modelDraft, setModelDraft] = useState("");
+  const [addMode, setAddMode] = useState<"paste" | "upload">("paste");
   const [pasteTitle, setPasteTitle] = useState("");
   const [pasteContent, setPasteContent] = useState("");
   const [uploadTitle, setUploadTitle] = useState("");
@@ -176,44 +177,6 @@ export function KnowledgePanel({ api = defaultApi }: Props) {
         </form>
       ) : null}
 
-      <div className="teaching-body">
-        <form className="teaching-form" onSubmit={submitPaste}>
-          <h2>粘贴文字</h2>
-          <label className="teaching-field">
-            <span>标题</span>
-            <input value={pasteTitle} onChange={(event) => setPasteTitle(event.target.value)} disabled={busy} />
-          </label>
-          <label className="teaching-field">
-            <span>正文</span>
-            <textarea value={pasteContent} onChange={(event) => setPasteContent(event.target.value)} disabled={busy} />
-          </label>
-          <button type="submit" className="teaching-submit" disabled={busy}>
-            粘贴
-          </button>
-        </form>
-
-        <form className="teaching-form" onSubmit={submitUpload}>
-          <h2>上传文件</h2>
-          <label className="teaching-field">
-            <span>标题（可空）</span>
-            <input value={uploadTitle} onChange={(event) => setUploadTitle(event.target.value)} disabled={busy} />
-          </label>
-          <label className="teaching-field">
-            <span>文件</span>
-            <input
-              ref={fileRef}
-              type="file"
-              accept=".txt,.md,.pdf,.docx"
-              disabled={busy}
-              onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-            />
-          </label>
-          <button type="submit" className="teaching-submit" disabled={busy || file === null}>
-            上传
-          </button>
-        </form>
-      </div>
-
       {notice ? (
         <p className="teaching-notice" role="alert">
           {notice}
@@ -229,30 +192,95 @@ export function KnowledgePanel({ api = defaultApi }: Props) {
       ) : documents.length === 0 ? (
         <p className="teaching-empty">还没有资料。</p>
       ) : (
-        <section className="teaching-list">
+        <section className="knowledge-library">
           <h2>已有资料</h2>
-          {documents.map((doc) => (
-            <article key={doc.document_id} className="teaching-item">
-              <div className="teaching-item-head">
-                <strong>{doc.title}</strong>
-                <span className="teaching-meta">{STATUS_LABEL[doc.status]}</span>
-              </div>
-              {doc.filename ? <p className="teaching-item-body">{doc.filename}</p> : null}
-              {doc.message ? <p className="teaching-item-body">{doc.message}</p> : null}
-              <div className="teaching-item-head">
-                {showRetry(doc) ? (
-                  <button type="button" className="teaching-seed" onClick={() => retry(doc)}>
-                    重试
+          <ul className="knowledge-rows">
+            {documents.map((doc) => (
+              <li key={doc.document_id} className="knowledge-row">
+                <div className="knowledge-row-main">
+                  <strong>{doc.title}</strong>
+                  <span className={`knowledge-status is-${doc.status}`}>{STATUS_LABEL[doc.status]}</span>
+                </div>
+                {doc.filename ? <p className="teaching-item-body">{doc.filename}</p> : null}
+                {doc.message ? <p className="teaching-item-body">{doc.message}</p> : null}
+                <div className="knowledge-row-actions">
+                  {showRetry(doc) ? (
+                    <button type="button" className="quick-task" onClick={() => retry(doc)}>
+                      重试
+                    </button>
+                  ) : null}
+                  <button type="button" className="knowledge-delete" onClick={() => remove(doc)}>
+                    删除
                   </button>
-                ) : null}
-                <button type="button" className="teaching-seed" onClick={() => remove(doc)}>
-                  删除
-                </button>
-              </div>
-            </article>
-          ))}
+                </div>
+              </li>
+            ))}
+          </ul>
         </section>
       )}
+
+      <nav className="teaching-tabs" role="tablist" aria-label="添加资料">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={addMode === "paste"}
+          className={`teaching-tab ${addMode === "paste" ? "is-active" : ""}`}
+          onClick={() => setAddMode("paste")}
+        >
+          粘贴文字
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={addMode === "upload"}
+          className={`teaching-tab ${addMode === "upload" ? "is-active" : ""}`}
+          onClick={() => setAddMode("upload")}
+        >
+          上传文件
+        </button>
+      </nav>
+
+      {addMode === "paste" ? (
+        <form className="teaching-form" onSubmit={submitPaste}>
+          <label className="teaching-field">
+            <span>标题</span>
+            <input value={pasteTitle} onChange={(event) => setPasteTitle(event.target.value)} disabled={busy} />
+          </label>
+          <label className="teaching-field">
+            <span>正文</span>
+            <textarea value={pasteContent} onChange={(event) => setPasteContent(event.target.value)} disabled={busy} />
+          </label>
+          <button type="submit" className="teaching-submit" disabled={busy}>
+            粘贴
+          </button>
+        </form>
+      ) : (
+        <form className="teaching-form" onSubmit={submitUpload}>
+          <label className="teaching-field">
+            <span>标题（可空）</span>
+            <input value={uploadTitle} onChange={(event) => setUploadTitle(event.target.value)} disabled={busy} />
+          </label>
+          <div className="knowledge-file">
+            <input
+              ref={fileRef}
+              className="sr-only"
+              type="file"
+              accept=".txt,.md,.pdf,.docx"
+              aria-label="文件"
+              disabled={busy}
+              onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+            />
+            <button type="button" className="knowledge-pick" disabled={busy} onClick={() => fileRef.current?.click()}>
+              选择文件
+            </button>
+            <span className="knowledge-filename">{file ? file.name : "未选择文件"}</span>
+          </div>
+          <button type="submit" className="teaching-submit" disabled={busy || file === null}>
+            上传
+          </button>
+        </form>
+      )}
+
     </div>
   );
 }
