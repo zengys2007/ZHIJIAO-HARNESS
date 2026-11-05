@@ -4,7 +4,7 @@
 
 **Goal:** 教师在「备课与学情」下面有独立的知识库，上传或粘贴资料后用向量检索，把相关段落注入这一轮对话。
 
-**Architecture:** 解析器按扩展名登记，文本按 512 token 上限切块，向量存在 SQLite。嵌入走 `{LLM_BASE_URL}/embeddings`，模型名是 `LLM_EMBEDDING_MODEL`，密钥沿用 `LLM_API_KEY`。对话注入在备课摘要之后新增一条系统消息，不改图的节点和边。
+**Architecture:** 解析器按扩展名登记，文本按 512 token 上限切块，向量存在 SQLite。嵌入走 `{嵌入地址}/embeddings`。`LLM_EMBEDDING_BASE_URL` 与 `LLM_EMBEDDING_API_KEY` 都非空时用这一对，否则地址和密钥沿用 `LLM_BASE_URL`、`LLM_API_KEY`。模型名是 `LLM_EMBEDDING_MODEL`。对话注入在备课摘要之后新增一条系统消息，不改图的节点和边。
 
 **Tech Stack:** Python 3.10、FastAPI、标准库 sqlite3 与 urllib、`pypdf`、`python-docx`、React、Vitest。不引入向量数据库或 NumPy。
 
@@ -18,7 +18,7 @@
 - 一位教师最多 50 份资料，失败的也计入。一份最多 200 块。标题 1 到 64 个字。粘贴正文最长 200000 个字符。文件最大 10 MB。
 - 扩展名只接受 `.txt`、`.md`、`.pdf`、`.docx`。类型只看文件名扩展名。`.txt` / `.md` 先 UTF-8，失败再 gb18030。
 - 每块不超过 512 token，重叠前一块末尾 64 token。单段超过 512 时按 token 切开。
-- 嵌入请求 `POST {LLM_BASE_URL}/embeddings`，`input` 每次数组最多 16 段，超时用 `LLM_TIMEOUT_SECONDS`。失败不重试。
+- 嵌入请求 `POST {嵌入地址}/embeddings`。专用地址和密钥都非空时用它们，否则用 `LLM_BASE_URL` 与 `LLM_API_KEY`。`input` 每次数组最多 16 段，超时用 `LLM_TIMEOUT_SECONDS`。失败不重试。
 - 资料存储状态只有 `pending`、`ready`、`failed`。换模型或未配置模型时，列表展示为 `pending`，不把存储状态改成 `failed`。
 - 检索取余弦相似度最高的 5 段，不设相似度阈值。知识库消息放在备课摘要之后。模型名为空、没有匹配分块、剩余预算小于标题行加 64 token，或提问嵌入失败时，不插入该消息，会话仍可成功。
 - 不登记检索工具，不增加图的节点或边。不把知识库段落并进备课摘要。
